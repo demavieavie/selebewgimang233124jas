@@ -84,6 +84,22 @@ local function RoundOuterCorner(frame, radius, keep)
 	end
 end
 
+local function WatchLogo(image, fallback)
+	task.spawn(function()
+		for _ = 1, 24 do
+			if image.IsLoaded then return end
+			task.wait(0.25)
+		end
+
+		if not image.IsLoaded then
+			image.Visible = false
+			if fallback then fallback.Visible = true end
+			warn("[Sena] logo failed to load: " .. tostring(image.Image)
+				.. " (use an Image asset id, not a Decal id)")
+		end
+	end)
+end
+
 local function Padding(parent, l, r, t, b)
 	return New("UIPadding", {
 		PaddingLeft = UDim.new(0, l or 0),
@@ -337,7 +353,7 @@ local function CountLines(text, width, font, textSize, maxLines)
 	return math.clamp(lines, 1, maxLines)
 end
 
-local function MakeDraggable(handle, target)
+local function MakeDraggable(handle, target, track)
 	local dragging, dragStart, startPos = false, nil, nil
 
 	handle.InputBegan:Connect(function(input)
@@ -355,7 +371,7 @@ local function MakeDraggable(handle, target)
 		end
 	end)
 
-	UserInputService.InputChanged:Connect(function(input)
+	local moved = UserInputService.InputChanged:Connect(function(input)
 		if not dragging then return end
 		if input.UserInputType ~= Enum.UserInputType.MouseMovement
 			and input.UserInputType ~= Enum.UserInputType.Touch then
@@ -368,6 +384,8 @@ local function MakeDraggable(handle, target)
 			startPos.Y.Scale, startPos.Y.Offset + delta.Y
 		)
 	end)
+
+	if track then track(moved) end
 end
 
 local Sena = {}
@@ -389,6 +407,16 @@ local NotifyGui, NotifyHolder
 local function EnsureNotifyGui()
 	if NotifyGui and NotifyGui.Parent then return end
 
+	local parent = GuiParent()
+
+	pcall(function()
+		for _, child in ipairs(parent:GetChildren()) do
+			if child.Name == "SenaNotify" then
+				pcall(function() child:Destroy() end)
+			end
+		end
+	end)
+
 	NotifyGui = New("ScreenGui", {
 		Name = "SenaNotify",
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
@@ -396,7 +424,7 @@ local function EnsureNotifyGui()
 		DisplayOrder = 9999,
 	})
 	Protect(NotifyGui)
-	NotifyGui.Parent = GuiParent()
+	NotifyGui.Parent = parent
 
 	NotifyHolder = New("Frame", {
 		Name = "Holder",
@@ -532,7 +560,21 @@ function Sena:CreateWindow(config)
 	local toggleKey  = config.ToggleKey or Enum.KeyCode.RightControl
 	local sidebarW   = tonumber(config.SidebarWidth) or 142
 
+	local logoIsAsset = logo:match("^rbxassetid://") ~= nil
+		or logo:match("^rbxasset://") ~= nil
+		or logo:match("^rbxthumb://") ~= nil
+		or logo:match("^http") ~= nil
+	local logoTint = config.LogoColor
+		or (logoIsAsset and Color3.fromRGB(255, 255, 255) or Theme.Text)
+
 	local Window = {}
+	local Connections = {}
+
+	local function Track(connection)
+		if connection then table.insert(Connections, connection) end
+		return connection
+	end
+
 	Window.Tabs = {}
 	Window.CurrentTab = nil
 	Window.Flags = Sena.Flags
@@ -589,11 +631,28 @@ function Sena:CreateWindow(config)
 	if logo ~= "" then
 		BrandLogo = New("ImageLabel", {
 			BackgroundTransparency = 1,
-			Position = UDim2.new(0, 14, 0, 17),
-			Size = UDim2.new(0, 22, 0, 22),
-			ImageColor3 = Theme.Text,
+			Position = UDim2.new(0, 14, 0, 16),
+			Size = UDim2.new(0, 24, 0, 24),
+			ScaleType = Enum.ScaleType.Fit,
+			ImageColor3 = logoTint,
 		}, Brand)
-		ApplyIcon(BrandLogo, logo, 48)
+		ApplyIcon(BrandLogo, logo, 256)
+
+		local BrandFallback = New("TextLabel", {
+			Name = "LogoFallback",
+			BackgroundColor3 = Theme.Element,
+			BorderSizePixel = 0,
+			Position = UDim2.new(0, 14, 0, 16),
+			Size = UDim2.new(0, 24, 0, 24),
+			Font = Theme.FontBold,
+			Text = title:sub(1, 1):upper(),
+			TextColor3 = Theme.Text,
+			TextSize = 13,
+			Visible = false,
+		}, Brand)
+		Corner(BrandFallback, 6)
+
+		WatchLogo(BrandLogo, BrandFallback)
 	end
 
 	local brandLeft = logo ~= "" and 44 or 14
@@ -926,24 +985,28 @@ function Sena:CreateWindow(config)
 		end)
 	end)
 
-	MakeDraggable(Topbar, Main)
-	MakeDraggable(Brand, Main)
+	MakeDraggable(Topbar, Main, Track)
+	MakeDraggable(Brand, Main, Track)
 
 	local IsOpen = true
+
+	local floatSize = tonumber(config.FloatSize) or 58
 
 	local FloatButton = New("ImageButton", {
 		Name = "SenaFloat",
 		AnchorPoint = Vector2.new(0, 0),
 		Position = UDim2.new(0, 20, 0, 20),
-		Size = UDim2.new(0, 46, 0, 46),
+		Size = UDim2.new(0, floatSize, 0, floatSize),
 		BackgroundColor3 = Theme.Sidebar,
+		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		Image = "",
 		AutoButtonColor = false,
 		Visible = false,
 	}, ScreenGui)
-	Corner(FloatButton, 23)
-	Stroke(FloatButton, Theme.Stroke, 1)
+	Corner(FloatButton, math.floor(floatSize / 2))
+
+	local FloatStroke = Stroke(FloatButton, Theme.Stroke, 1, 1)
 
 	local FloatLabel = New("TextLabel", {
 		AnchorPoint = Vector2.new(0.5, 0.5),
@@ -951,24 +1014,46 @@ function Sena:CreateWindow(config)
 		Size = UDim2.new(1, 0, 1, 0),
 		BackgroundTransparency = 1,
 		Font = Theme.FontBold,
-		Text = title:sub(1, 1):upper(),
+		Text = "",
 		TextColor3 = Theme.Text,
-		TextSize = 19,
+		TextSize = math.floor(floatSize * 0.42),
+		Visible = false,
 	}, FloatButton)
 
-	if logo ~= "" then
-		FloatLabel.Text = ""
-		local floatIcon = New("ImageLabel", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.new(0.5, 0, 0.5, 0),
-			Size = UDim2.new(0, 22, 0, 22),
-			BackgroundTransparency = 1,
-			ImageColor3 = Theme.Text,
-		}, FloatButton)
-		ApplyIcon(floatIcon, logo, 48)
+	local function FloatMonogram()
+		FloatButton.BackgroundTransparency = 0
+		FloatStroke.Transparency = 0
+		FloatLabel.Text = title:sub(1, 1):upper()
+		FloatLabel.Visible = true
 	end
 
-	MakeDraggable(FloatButton, FloatButton)
+	if logo == "" then
+		FloatMonogram()
+	else
+		local floatIcon = New("ImageLabel", {
+			Name = "Logo",
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, 0, 0.5, 0),
+			Size = UDim2.new(1, 0, 1, 0),
+			BackgroundTransparency = 1,
+			ScaleType = Enum.ScaleType.Fit,
+			ImageColor3 = logoTint,
+		}, FloatButton)
+		ApplyIcon(floatIcon, logo, 256)
+
+		task.spawn(function()
+			for _ = 1, 24 do
+				if floatIcon.IsLoaded then return end
+				task.wait(0.25)
+			end
+			if not floatIcon.IsLoaded then
+				floatIcon.Visible = false
+				FloatMonogram()
+			end
+		end)
+	end
+
+	MakeDraggable(FloatButton, FloatButton, Track)
 
 	local function SetOpen(state)
 		IsOpen = state
@@ -996,12 +1081,12 @@ function Sena:CreateWindow(config)
 		Window:Destroy()
 	end)
 
-	UserInputService.InputBegan:Connect(function(input, processed)
+	Track(UserInputService.InputBegan:Connect(function(input, processed)
 		if processed then return end
 		if input.KeyCode == toggleKey then
 			SetOpen(not IsOpen)
 		end
-	end)
+	end))
 
 	function Window:Toggle(state)
 		if state == nil then state = not IsOpen end
@@ -1010,6 +1095,11 @@ function Sena:CreateWindow(config)
 
 	function Window:Destroy()
 		Sena.Unloaded = true
+
+		for _, connection in ipairs(Connections) do
+			pcall(function() connection:Disconnect() end)
+		end
+		table.clear(Connections)
 		Tween(Scale, QUICK, { Scale = 0.9 })
 		task.delay(0.18, function()
 			pcall(function() ScreenGui:Destroy() end)
@@ -2135,22 +2225,22 @@ function Sena:CreateWindow(config)
 					end
 				end)
 
-				UserInputService.InputChanged:Connect(function(input)
+				Track(UserInputService.InputChanged:Connect(function(input)
 					if not dragging then return end
 					if input.UserInputType == Enum.UserInputType.MouseMovement
 						or input.UserInputType == Enum.UserInputType.Touch then
 						UpdateFromX(input.Position.X)
 					end
-				end)
+				end))
 
-				UserInputService.InputEnded:Connect(function(input)
+				Track(UserInputService.InputEnded:Connect(function(input)
 					if not dragging then return end
 					if input.UserInputType == Enum.UserInputType.MouseButton1
 						or input.UserInputType == Enum.UserInputType.Touch then
 						dragging = false
 						Tween(Knob, QUICK, { Size = UDim2.new(0, 10, 0, 10) })
 					end
-				end)
+				end))
 
 				task.defer(function() Render(false) end)
 				Register(Row, sTitle .. " " .. sDesc)
@@ -2578,7 +2668,7 @@ function Sena:CreateWindow(config)
 					Bind.TextColor3 = Theme.Accent
 				end)
 
-				UserInputService.InputBegan:Connect(function(input, processed)
+				Track(UserInputService.InputBegan:Connect(function(input, processed)
 					if listening then
 						if input.UserInputType == Enum.UserInputType.Keyboard then
 							listening = false
@@ -2595,7 +2685,7 @@ function Sena:CreateWindow(config)
 					if input.KeyCode == currentKey then
 						task.spawn(function() pcall(callback, currentKey) end)
 					end
-				end)
+				end))
 
 				SetKey(default, true)
 				Register(Row, kTitle .. " " .. kDesc)
@@ -2790,7 +2880,7 @@ function Sena:CreateWindow(config)
 				Action(RowOne, 1, "save", "Save", function()
 					local name = CurrentName()
 					if name == "" then
-						Sena:Notify({ Title = "Config", Content = "Isi nama config dulu.", Icon = "triangle-alert" })
+						Sena:Notify({ Title = "Config", Content = "Enter a config name first.", Icon = "triangle-alert" })
 						return
 					end
 
@@ -2811,7 +2901,7 @@ function Sena:CreateWindow(config)
 				Action(RowOne, 2, "folder-open", "Load", function()
 					local name = CurrentName()
 					if name == "" then
-						Sena:Notify({ Title = "Config", Content = "Pilih config dulu.", Icon = "triangle-alert" })
+						Sena:Notify({ Title = "Config", Content = "Select a config first.", Icon = "triangle-alert" })
 						return
 					end
 
@@ -2852,7 +2942,7 @@ function Sena:CreateWindow(config)
 
 				Action(RowTwo, 2, "rotate-cw", "Refresh", function()
 					RefreshList(CurrentName())
-					Sena:Notify({ Title = "Config", Content = "List di-refresh.", Icon = "rotate-cw", Duration = 2 })
+					Sena:Notify({ Title = "Config", Content = "Config list refreshed.", Icon = "rotate-cw", Duration = 2 })
 				end)
 
 				local PasteInput
@@ -2861,14 +2951,14 @@ function Sena:CreateWindow(config)
 				Action(RowThree, 1, "clipboard-copy", "Export", function()
 					local encoded = ConfigSystem:Export()
 					if not encoded then
-						Sena:Notify({ Title = "Export failed", Content = "Gagal encode config.", Icon = "triangle-alert" })
+						Sena:Notify({ Title = "Export failed", Content = "Could not encode the config.", Icon = "triangle-alert" })
 						return
 					end
 
 					if CopyToClipboard(encoded) then
 						Sena:Notify({
 							Title = "Config exported",
-							Content = "JSON udah di-copy ke clipboard.",
+							Content = "Config JSON copied to clipboard.",
 							Icon = "clipboard-check",
 						})
 						return
@@ -2879,7 +2969,7 @@ function Sena:CreateWindow(config)
 						if pcall(function() writefile(path, encoded) end) then
 							Sena:Notify({
 								Title = "Config exported",
-								Content = "Executor nggak support clipboard, disimpan ke " .. path,
+								Content = "No clipboard support, saved to " .. path,
 								Icon = "save",
 								Duration = 7,
 							})
@@ -2889,7 +2979,7 @@ function Sena:CreateWindow(config)
 
 					Sena:Notify({
 						Title = "Export failed",
-						Content = "Executor ini nggak support clipboard maupun writefile.",
+						Content = "This executor supports neither clipboard nor writefile.",
 						Icon = "triangle-alert",
 						Duration = 7,
 					})
@@ -2913,7 +3003,7 @@ function Sena:CreateWindow(config)
 					if not raw then
 						Sena:Notify({
 							Title = "Import failed",
-							Content = "Nggak ada data. Paste JSON-nya ke field Import Data.",
+							Content = "Nothing to import. Paste the config JSON into the Import Data field.",
 							Icon = "triangle-alert",
 							Duration = 7,
 						})
@@ -2921,17 +3011,17 @@ function Sena:CreateWindow(config)
 					end
 
 					if ConfigSystem:Import(raw) then
-						Sena:Notify({ Title = "Config imported", Content = "Semua nilai udah diterapkan.", Icon = "clipboard-check" })
+						Sena:Notify({ Title = "Config imported", Content = "All values have been applied.", Icon = "clipboard-check" })
 						if PasteInput then PasteInput:Set("", true) end
 					else
-						Sena:Notify({ Title = "Import failed", Content = "JSON-nya nggak valid.", Icon = "triangle-alert" })
+						Sena:Notify({ Title = "Import failed", Content = "That is not valid config JSON.", Icon = "triangle-alert" })
 					end
 				end)
 
 				if not CanReadClipboard() then
 					PasteInput = Elements:AddInput({
 						Title       = "Import Data",
-						Description = "Executor ini nggak bisa baca clipboard — paste JSON config di sini.",
+						Description = "This executor cannot read the clipboard. Paste the config JSON here.",
 						Placeholder = "{\"...\":...}",
 						Width       = 110,
 						NoConfig    = true,
@@ -2941,14 +3031,14 @@ function Sena:CreateWindow(config)
 
 				AutoLoadToggle = Elements:AddToggle({
 					Title       = "Auto Load",
-					Description = "Muat config ini otomatis tiap script dijalankan.",
+					Description = "Load this config automatically on every run.",
 					Default     = ConfigSystem:GetAutoLoad() ~= "",
 					NoConfig    = true,
 					Callback    = function(state)
 						if suppressAutoLoad then return end
 						local name = CurrentName()
 						if state and name == "" then
-							Sena:Notify({ Title = "Auto Load", Content = "Pilih config dulu.", Icon = "triangle-alert" })
+							Sena:Notify({ Title = "Auto Load", Content = "Select a config first.", Icon = "triangle-alert" })
 							return
 						end
 						ConfigSystem:SetAutoLoad(name, state)
@@ -2957,7 +3047,7 @@ function Sena:CreateWindow(config)
 
 				if not ConfigSystem.HasFiles then
 					Elements:AddLabel({
-						Title = "Executor tanpa file API — config cuma bertahan selama sesi ini.",
+						Title = "No file API on this executor, configs last for this session only.",
 					})
 				end
 
