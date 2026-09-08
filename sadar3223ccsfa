@@ -1,0 +1,3020 @@
+local Players            = game:GetService("Players")
+local RunService         = game:GetService("RunService")
+local TweenService       = game:GetService("TweenService")
+local UserInputService   = game:GetService("UserInputService")
+local TextService        = game:GetService("TextService")
+local HttpService        = game:GetService("HttpService")
+
+local LocalPlayer = Players.LocalPlayer
+
+local Theme = {
+	Accent        = Color3.fromRGB(232, 232, 238),
+	AccentText    = Color3.fromRGB(14, 14, 17),
+
+	Backdrop      = Color3.fromRGB(9, 9, 11),
+	Sidebar       = Color3.fromRGB(13, 13, 16),
+	Topbar        = Color3.fromRGB(13, 13, 16),
+	Bottombar     = Color3.fromRGB(11, 11, 14),
+	Card          = Color3.fromRGB(18, 18, 21),
+	Element       = Color3.fromRGB(25, 25, 29),
+	ElementHover  = Color3.fromRGB(33, 33, 38),
+	Track         = Color3.fromRGB(44, 44, 51),
+
+	Stroke        = Color3.fromRGB(38, 38, 45),
+	StrokeSoft    = Color3.fromRGB(28, 28, 34),
+
+	Text          = Color3.fromRGB(234, 234, 239),
+	SubText       = Color3.fromRGB(139, 139, 151),
+	Dim           = Color3.fromRGB(96, 96, 107),
+
+	Font          = Enum.Font.GothamMedium,
+	FontBold      = Enum.Font.GothamBold,
+	FontBody      = Enum.Font.Gotham,
+}
+
+local DISCORD_ICON = "rbxassetid://94434236999817"
+
+local function New(class, props, parent)
+	local inst = Instance.new(class)
+	for key, value in pairs(props or {}) do
+		if key ~= "Parent" then
+			pcall(function() inst[key] = value end)
+		end
+	end
+	if parent then inst.Parent = parent end
+	return inst
+end
+
+local function Corner(parent, radius)
+	return New("UICorner", { CornerRadius = UDim.new(0, radius or 6) }, parent)
+end
+
+local function Stroke(parent, color, thickness, transparency)
+	return New("UIStroke", {
+		Color = color or Theme.Stroke,
+		Thickness = thickness or 1,
+		Transparency = transparency or 0,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	}, parent)
+end
+
+local function RoundOuterCorner(frame, radius, keep)
+	New("UICorner", { CornerRadius = UDim.new(0, radius) }, frame)
+
+	local function patch(position, size)
+		New("Frame", {
+			Name = "CornerPatch",
+			BackgroundColor3 = frame.BackgroundColor3,
+			BackgroundTransparency = frame.BackgroundTransparency,
+			BorderSizePixel = 0,
+			Position = position,
+			Size = size,
+			ZIndex = 0,
+		}, frame)
+	end
+
+	if keep == "topleft" then
+		patch(UDim2.new(0, radius, 0, 0), UDim2.new(1, -radius, 1, 0))
+		patch(UDim2.new(0, 0, 0, radius), UDim2.new(0, radius, 1, -radius))
+	elseif keep == "topright" then
+		patch(UDim2.new(0, 0, 0, 0), UDim2.new(1, -radius, 1, 0))
+		patch(UDim2.new(1, -radius, 0, radius), UDim2.new(0, radius, 1, -radius))
+	elseif keep == "bottom" then
+		patch(UDim2.new(0, 0, 0, 0), UDim2.new(1, 0, 1, -radius))
+	end
+end
+
+local function Padding(parent, l, r, t, b)
+	return New("UIPadding", {
+		PaddingLeft = UDim.new(0, l or 0),
+		PaddingRight = UDim.new(0, r or 0),
+		PaddingTop = UDim.new(0, t or 0),
+		PaddingBottom = UDim.new(0, b or 0),
+	}, parent)
+end
+
+local QUICK = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local SMOOTH = TweenInfo.new(0.24, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+
+local function Tween(object, info, props)
+	if not object then return end
+	local ok, tween = pcall(function()
+		return TweenService:Create(object, info, props)
+	end)
+	if ok and tween then
+		pcall(function() tween:Play() end)
+		return tween
+	end
+	for key, value in pairs(props) do
+		pcall(function() object[key] = value end)
+	end
+end
+
+local function GuiParent()
+	local ok, hidden = pcall(function() return gethui() end)
+	if ok and hidden then return hidden end
+
+	local okCore, coreGui = pcall(function()
+		local cg = game:GetService("CoreGui")
+		local _ = cg:GetChildren()
+		return cg
+	end)
+	if okCore and coreGui then return coreGui end
+
+	return LocalPlayer:WaitForChild("PlayerGui")
+end
+
+local function Protect(gui)
+	pcall(function()
+		if syn and syn.protect_gui then
+			syn.protect_gui(gui)
+		elseif protect_gui then
+			protect_gui(gui)
+		end
+	end)
+end
+
+local function GetExecutorName()
+	local ok, name = pcall(function()
+		if identifyexecutor then
+			return (identifyexecutor())
+		end
+		if getexecutorname then
+			return getexecutorname()
+		end
+		return nil
+	end)
+
+	name = ok and name and tostring(name) or ""
+	name = name:gsub("^%s+", ""):gsub("%s+$", "")
+
+	if name == "" then
+		return RunService:IsStudio() and "Studio" or "Unknown"
+	end
+
+	return name
+end
+
+local function CopyToClipboard(text)
+	local fn = setclipboard or toclipboard or writeclipboard
+	if type(fn) ~= "function" then return false end
+	return (pcall(fn, tostring(text)))
+end
+
+local function ReadClipboard()
+	local fn = getclipboard or getclipboardtext or readclipboard
+	if type(fn) ~= "function" then return nil end
+
+	local ok, value = pcall(fn)
+	if ok and type(value) == "string" and value ~= "" then
+		return value
+	end
+	return nil
+end
+
+local function CanReadClipboard()
+	return type(getclipboard) == "function"
+		or type(getclipboardtext) == "function"
+		or type(readclipboard) == "function"
+end
+
+local LUCIDE_URL =
+	"https://raw.githubusercontent.com/latte-soft/lucide-roblox/master/lib/Icons.luau"
+
+local IconPack, IconPackTried = nil, false
+
+local function GetIconPack()
+	if IconPackTried then return IconPack end
+	IconPackTried = true
+
+	local okCache, cached = pcall(function()
+		return getgenv().SenaLucideIcons
+	end)
+	if okCache and type(cached) == "table" then
+		IconPack = cached
+		return IconPack
+	end
+
+	pcall(function()
+		local source = game:HttpGet(LUCIDE_URL)
+		if type(source) == "string" and #source > 1000 then
+			local chunk = loadstring(source)
+			if chunk then
+				local ok, result = pcall(chunk)
+				if ok and type(result) == "table" then
+					IconPack = result
+				end
+			end
+		end
+	end)
+
+	if IconPack then
+		pcall(function() getgenv().SenaLucideIcons = IconPack end)
+	end
+
+	return IconPack
+end
+
+local function LucideAsset(name, size)
+	local pack = GetIconPack()
+	if not pack then return nil end
+
+	local set = pack[tostring(size or 48) .. "px"] or pack["48px"] or pack["256px"]
+	local entry = set and set[name]
+	if type(entry) ~= "table" then return nil end
+
+	local rect, offset = entry[2], entry[3]
+	return "rbxassetid://" .. tostring(entry[1]),
+		Vector2.new(offset and offset[1] or 0, offset and offset[2] or 0),
+		Vector2.new(rect and rect[1] or 0, rect and rect[2] or 0)
+end
+
+local FallbackIcons = {
+	["home"]                 = "rbxassetid://6340513838",
+	["menu"]                 = "rbxassetid://6340513838",
+	["settings"]             = "rbxassetid://70386228443175",
+	["cog"]                  = "rbxassetid://70386228443175",
+	["eye"]                  = "rbxassetid://14321059114",
+	["user"]                 = "rbxassetid://108483430622128",
+	["users"]                = "rbxassetid://12120698352",
+	["shopping-cart"]        = "rbxassetid://128874923961846",
+	["store"]                = "rbxassetid://4985385964",
+	["backpack"]             = "rbxassetid://8601111810",
+	["sword"]                = "rbxassetid://82472368671405",
+	["swords"]               = "rbxassetid://82472368671405",
+	["repeat"]               = "rbxassetid://122032243989747",
+	["refresh-cw"]           = "rbxassetid://122032243989747",
+	["map-pin"]              = "rbxassetid://17824309485",
+	["compass"]              = "rbxassetid://125300760963399",
+	["gamepad-2"]            = "rbxassetid://84173963561612",
+	["scroll"]               = "rbxassetid://114127804740858",
+	["crosshair"]            = "rbxassetid://12614416478",
+	["bar-chart"]            = "rbxassetid://12094445329",
+	["bar-chart-3"]          = "rbxassetid://12094445329",
+	["trending-up"]          = "rbxassetid://12094445329",
+	["star"]                 = "rbxassetid://107005941750079",
+	["skull"]                = "rbxassetid://17313330026",
+	["credit-card"]          = "rbxassetid://18747025078",
+	["scan"]                 = "rbxassetid://109869955247116",
+	["scan-line"]            = "rbxassetid://109869955247116",
+	["alert-triangle"]       = "rbxassetid://73186275216515",
+	["triangle-alert"]       = "rbxassetid://73186275216515",
+	["help-circle"]          = "rbxassetid://17510196486",
+	["circle-help"]          = "rbxassetid://17510196486",
+	["lightbulb"]            = "rbxassetid://16833255748",
+	["info"]                 = "rbxassetid://16833255748",
+	["zap"]                  = "rbxassetid://13321880293",
+	["droplet"]              = "rbxassetid://100076212630732",
+	["play"]                 = "rbxassetid://108886429866687",
+	["chevron-right"]        = "rbxassetid://12662718374",
+	["fish"]                 = "rbxassetid://97167558235554",
+	["globe"]                = "rbxassetid://137601480983962",
+	["plug"]                 = "rbxassetid://137601480983962",
+	["mouse-pointer-click"]  = "rbxassetid://7734010488",
+	["egg"]                  = "rbxassetid://8601111810",
+	["gift"]                 = "rbxassetid://18747025078",
+	["search"]               = "rbxassetid://109869955247116",
+}
+
+local function ApplyIcon(image, name, size)
+	if not image then return end
+	name = tostring(name or "")
+
+	if name == "" then
+		image.Image = ""
+		return
+	end
+
+	if name:match("^rbxassetid://") or name:match("^rbxasset://") or name:match("^http") then
+		image.Image = name
+		image.ImageRectOffset = Vector2.new(0, 0)
+		image.ImageRectSize = Vector2.new(0, 0)
+		return
+	end
+
+	local assetId, rectOffset, rectSize = LucideAsset(name, size or 48)
+	if assetId then
+		image.Image = assetId
+		image.ImageRectOffset = rectOffset
+		image.ImageRectSize = rectSize
+		return
+	end
+
+	image.Image = FallbackIcons[name] or FallbackIcons[name:gsub("_", "-")] or ""
+	image.ImageRectOffset = Vector2.new(0, 0)
+	image.ImageRectSize = Vector2.new(0, 0)
+end
+
+local DESC_LINE = 13
+local ROW_PAD   = 10
+local TITLE_H   = 15
+
+local function CountLines(text, width, font, textSize, maxLines)
+	text = tostring(text or "")
+	if text == "" then return 0 end
+
+	maxLines = maxLines or 3
+	width = math.floor(tonumber(width) or 0)
+
+	local lines
+	if width >= 20 then
+		local ok, bounds = pcall(function()
+			return TextService:GetTextSize(text, textSize, font, Vector2.new(width, 100000))
+		end)
+		if ok and bounds and bounds.Y > 0 then
+			lines = math.ceil(bounds.Y / (textSize + 2))
+		end
+	end
+
+	if not lines then
+		local perLine = math.max(10, math.floor((width > 0 and width or 200) / (textSize * 0.52)))
+		lines = 0
+		for segment in (text .. "\n"):gmatch("(.-)\n") do
+			lines = lines + math.max(1, math.ceil(#segment / perLine))
+		end
+	end
+
+	return math.clamp(lines, 1, maxLines)
+end
+
+local function MakeDraggable(handle, target)
+	local dragging, dragStart, startPos = false, nil, nil
+
+	handle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = target.Position
+
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+			end)
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if not dragging then return end
+		if input.UserInputType ~= Enum.UserInputType.MouseMovement
+			and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+
+		local delta = input.Position - dragStart
+		target.Position = UDim2.new(
+			startPos.X.Scale, startPos.X.Offset + delta.X,
+			startPos.Y.Scale, startPos.Y.Offset + delta.Y
+		)
+	end)
+end
+
+local Sena = {}
+Sena.Theme = Theme
+Sena.Flags = {}
+Sena.Windows = {}
+Sena.Unloaded = false
+
+function Sena:SetTheme(overrides)
+	for key, value in pairs(overrides or {}) do
+		if Theme[key] ~= nil then
+			Theme[key] = value
+		end
+	end
+end
+
+local NotifyGui, NotifyHolder
+
+local function EnsureNotifyGui()
+	if NotifyGui and NotifyGui.Parent then return end
+
+	NotifyGui = New("ScreenGui", {
+		Name = "SenaNotify",
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		ResetOnSpawn = false,
+		DisplayOrder = 9999,
+	})
+	Protect(NotifyGui)
+	NotifyGui.Parent = GuiParent()
+
+	NotifyHolder = New("Frame", {
+		Name = "Holder",
+		AnchorPoint = Vector2.new(1, 1),
+		Position = UDim2.new(1, -18, 1, -18),
+		Size = UDim2.new(0, 270, 1, -36),
+		BackgroundTransparency = 1,
+	}, NotifyGui)
+
+	New("UIListLayout", {
+		Padding = UDim.new(0, 8),
+		HorizontalAlignment = Enum.HorizontalAlignment.Right,
+		VerticalAlignment = Enum.VerticalAlignment.Bottom,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, NotifyHolder)
+end
+
+function Sena:Notify(config)
+	config = config or {}
+	local title    = tostring(config.Title or config[1] or "Sena")
+	local content  = tostring(config.Content or config.Description or config[2] or "")
+	local duration = tonumber(config.Duration or config.Time or config[3]) or 4
+	local icon     = config.Icon
+
+	EnsureNotifyGui()
+
+	local descLines = content ~= "" and CountLines(content, 216, Theme.FontBody, 12, 4) or 0
+	local height = 34 + (descLines > 0 and (descLines * DESC_LINE + 6) or 0)
+
+	local slot = New("Frame", {
+		Name = "Slot",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, height),
+		ClipsDescendants = false,
+	}, NotifyHolder)
+
+	local card = New("Frame", {
+		Name = "Notification",
+		BackgroundColor3 = Theme.Card,
+		BorderSizePixel = 0,
+		Size = UDim2.new(1, 0, 1, 0),
+		Position = UDim2.new(1, 20, 0, 0),
+		BackgroundTransparency = 1,
+	}, slot)
+	Corner(card, 8)
+	local cardStroke = Stroke(card, Theme.Stroke, 1, 1)
+
+	local iconImage
+	if icon then
+		iconImage = New("ImageLabel", {
+			BackgroundTransparency = 1,
+			Position = UDim2.new(0, 12, 0, 11),
+			Size = UDim2.new(0, 14, 0, 14),
+			ImageColor3 = Theme.Text,
+			ImageTransparency = 1,
+		}, card)
+		ApplyIcon(iconImage, icon, 48)
+	end
+
+	local textLeft = icon and 32 or 12
+
+	local titleLabel = New("TextLabel", {
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, textLeft, 0, 9),
+		Size = UDim2.new(1, -textLeft - 12, 0, 15),
+		Font = Theme.FontBold,
+		Text = title,
+		TextColor3 = Theme.Text,
+		TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTransparency = 1,
+	}, card)
+
+	local descLabel
+	if content ~= "" then
+		descLabel = New("TextLabel", {
+			BackgroundTransparency = 1,
+			Position = UDim2.new(0, textLeft, 0, 26),
+			Size = UDim2.new(1, -textLeft - 12, 0, descLines * DESC_LINE),
+			Font = Theme.FontBody,
+			Text = content,
+			TextColor3 = Theme.SubText,
+			TextSize = 11,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Top,
+			TextWrapped = true,
+			TextTransparency = 1,
+		}, card)
+	end
+
+	local bar = New("Frame", {
+		BackgroundColor3 = Theme.Accent,
+		BorderSizePixel = 0,
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 0, 1, 0),
+		Size = UDim2.new(1, 0, 0, 2),
+		BackgroundTransparency = 0.35,
+	}, card)
+	Corner(bar, 2)
+
+	Tween(card, SMOOTH, { Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 0 })
+	Tween(cardStroke, SMOOTH, { Transparency = 0 })
+	Tween(titleLabel, SMOOTH, { TextTransparency = 0 })
+	if descLabel then Tween(descLabel, SMOOTH, { TextTransparency = 0 }) end
+	if iconImage then Tween(iconImage, SMOOTH, { ImageTransparency = 0 }) end
+	Tween(bar, TweenInfo.new(duration, Enum.EasingStyle.Linear), { Size = UDim2.new(0, 0, 0, 2) })
+
+	local closed = false
+	local function close()
+		if closed then return end
+		closed = true
+		Tween(card, QUICK, { Position = UDim2.new(1, 20, 0, 0), BackgroundTransparency = 1 })
+		Tween(cardStroke, QUICK, { Transparency = 1 })
+		Tween(titleLabel, QUICK, { TextTransparency = 1 })
+		if descLabel then Tween(descLabel, QUICK, { TextTransparency = 1 }) end
+		if iconImage then Tween(iconImage, QUICK, { ImageTransparency = 1 }) end
+		task.delay(0.2, function() pcall(function() slot:Destroy() end) end)
+	end
+
+	task.delay(duration, close)
+	return { Close = close }
+end
+
+function Sena:CreateWindow(config)
+	config = config or {}
+
+	local title      = tostring(config.Title or config[1] or "Sena")
+	local subTitle   = tostring(config.SubTitle or config.Description or config[2] or "")
+	local size       = config.Size or UDim2.fromOffset(680, 452)
+	local logo       = config.Logo or ""
+	local discord    = tostring(config.Discord or "dsc.gg/senahub")
+	local version    = tostring(config.Version or "v1.0")
+	local toggleKey  = config.ToggleKey or Enum.KeyCode.RightControl
+	local sidebarW   = tonumber(config.SidebarWidth) or 142
+
+	local Window = {}
+	Window.Tabs = {}
+	Window.CurrentTab = nil
+	Window.Flags = Sena.Flags
+
+	local ScreenGui = New("ScreenGui", {
+		Name = "SenaUI",
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		DisplayOrder = 9998,
+	})
+	Protect(ScreenGui)
+	ScreenGui.Parent = GuiParent()
+	Window.ScreenGui = ScreenGui
+
+	local Main = New("Frame", {
+		Name = "Main",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.5, 0),
+		Size = size,
+		BackgroundColor3 = Theme.Backdrop,
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+	}, ScreenGui)
+	local WINDOW_RADIUS = 10
+	Corner(Main, WINDOW_RADIUS)
+	Stroke(Main, Theme.Stroke, 1)
+
+	local Scale = New("UIScale", { Scale = 1 }, Main)
+
+	local Sidebar = New("Frame", {
+		Name = "Sidebar",
+		BackgroundColor3 = Theme.Sidebar,
+		BorderSizePixel = 0,
+		Size = UDim2.new(0, sidebarW, 1, -34),
+	}, Main)
+	RoundOuterCorner(Sidebar, WINDOW_RADIUS, "topleft")
+
+	New("Frame", {
+		Name = "SidebarDivider",
+		BackgroundColor3 = Theme.StrokeSoft,
+		BorderSizePixel = 0,
+		Position = UDim2.new(1, -1, 0, 0),
+		Size = UDim2.new(0, 1, 1, 0),
+	}, Sidebar)
+
+	local Brand = New("Frame", {
+		Name = "Brand",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 58),
+	}, Sidebar)
+
+	local BrandLogo
+	if logo ~= "" then
+		BrandLogo = New("ImageLabel", {
+			BackgroundTransparency = 1,
+			Position = UDim2.new(0, 14, 0, 17),
+			Size = UDim2.new(0, 22, 0, 22),
+			ImageColor3 = Theme.Text,
+		}, Brand)
+		ApplyIcon(BrandLogo, logo, 48)
+	end
+
+	local brandLeft = logo ~= "" and 44 or 14
+
+	New("TextLabel", {
+		Name = "BrandTitle",
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, brandLeft, 0, subTitle ~= "" and 15 or 21),
+		Size = UDim2.new(1, -brandLeft - 12, 0, 16),
+		Font = Theme.FontBold,
+		Text = title,
+		TextColor3 = Theme.Text,
+		TextSize = 15,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, Brand)
+
+	if subTitle ~= "" then
+		New("TextLabel", {
+			Name = "BrandSub",
+			BackgroundTransparency = 1,
+			Position = UDim2.new(0, brandLeft, 0, 31),
+			Size = UDim2.new(1, -brandLeft - 12, 0, 12),
+			Font = Theme.FontBody,
+			Text = subTitle,
+			TextColor3 = Theme.Dim,
+			TextSize = 11,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+		}, Brand)
+	end
+
+	local TabList = New("ScrollingFrame", {
+		Name = "TabList",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, 0, 0, 58),
+		Size = UDim2.new(1, -1, 1, -58),
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollBarThickness = 0,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+	}, Sidebar)
+	Padding(TabList, 8, 8, 2, 10)
+
+	New("UIListLayout", {
+		Padding = UDim.new(0, 3),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, TabList)
+
+	local Topbar = New("Frame", {
+		Name = "Topbar",
+		BackgroundColor3 = Theme.Topbar,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, sidebarW, 0, 0),
+		Size = UDim2.new(1, -sidebarW, 0, 46),
+	}, Main)
+	RoundOuterCorner(Topbar, WINDOW_RADIUS, "topright")
+
+	New("Frame", {
+		Name = "TopbarDivider",
+		BackgroundColor3 = Theme.StrokeSoft,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, 0, 1, -1),
+		Size = UDim2.new(1, 0, 0, 1),
+	}, Topbar)
+
+	local PageTitle = New("TextLabel", {
+		Name = "PageTitle",
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, 16, 0, 9),
+		Size = UDim2.new(0, 200, 0, 15),
+		Font = Theme.FontBold,
+		Text = "",
+		TextColor3 = Theme.Text,
+		TextSize = 13,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, Topbar)
+
+	local PageDesc = New("TextLabel", {
+		Name = "PageDesc",
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, 16, 0, 24),
+		Size = UDim2.new(0, 220, 0, 12),
+		Font = Theme.FontBody,
+		Text = "",
+		TextColor3 = Theme.Dim,
+		TextSize = 11,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+	}, Topbar)
+
+	local function ControlButton(order, iconName, tooltip, glyph)
+		local button = New("TextButton", {
+			Name = tooltip or "Control",
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, -10 - (order - 1) * 28, 0.5, 0),
+			Size = UDim2.new(0, 24, 0, 24),
+			BackgroundColor3 = Theme.Element,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Text = "",
+			AutoButtonColor = false,
+		}, Topbar)
+		Corner(button, 6)
+
+		local image = New("ImageLabel", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, 0, 0.5, 0),
+			Size = UDim2.new(0, 13, 0, 13),
+			BackgroundTransparency = 1,
+			ImageColor3 = Theme.SubText,
+		}, button)
+		ApplyIcon(image, iconName, 48)
+
+		if image.Image == "" then
+			image.Visible = false
+			button.Font = Theme.Font
+			button.TextSize = 14
+			button.TextColor3 = Theme.SubText
+			button.Text = glyph or "?"
+		end
+
+		button.MouseEnter:Connect(function()
+			Tween(button, QUICK, { BackgroundTransparency = 0 })
+			Tween(image, QUICK, { ImageColor3 = Theme.Text })
+			if not image.Visible then
+				Tween(button, QUICK, { TextColor3 = Theme.Text })
+			end
+		end)
+		button.MouseLeave:Connect(function()
+			Tween(button, QUICK, { BackgroundTransparency = 1 })
+			Tween(image, QUICK, { ImageColor3 = Theme.SubText })
+			if not image.Visible then
+				Tween(button, QUICK, { TextColor3 = Theme.SubText })
+			end
+		end)
+
+		return button, image
+	end
+
+	local CloseButton  = ControlButton(1, "x", "Close", "\u{00D7}")
+	local MiniButton   = ControlButton(2, "minus", "Minimize", "\u{2013}")
+
+	local SearchBox = New("TextBox", {
+		Name = "Search",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -68, 0.5, 0),
+		Size = UDim2.new(0, 150, 0, 26),
+		BackgroundColor3 = Theme.Element,
+		BorderSizePixel = 0,
+		Font = Theme.FontBody,
+		PlaceholderText = "Search",
+		PlaceholderColor3 = Theme.Dim,
+		Text = "",
+		TextColor3 = Theme.Text,
+		TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ClearTextOnFocus = false,
+	}, Topbar)
+	Corner(SearchBox, 6)
+	Stroke(SearchBox, Theme.StrokeSoft, 1)
+	Padding(SearchBox, 28, 8, 0, 0)
+
+	local SearchIcon = New("ImageLabel", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, -20, 0.5, 0),
+		Size = UDim2.new(0, 12, 0, 12),
+		BackgroundTransparency = 1,
+		ImageColor3 = Theme.Dim,
+	}, SearchBox)
+	ApplyIcon(SearchIcon, "search", 48)
+
+	local Content = New("Frame", {
+		Name = "Content",
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, sidebarW, 0, 46),
+		Size = UDim2.new(1, -sidebarW, 1, -46 - 34),
+		ClipsDescendants = true,
+	}, Main)
+
+	local Bottombar = New("Frame", {
+		Name = "Bottombar",
+		BackgroundColor3 = Theme.Bottombar,
+		BorderSizePixel = 0,
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 0, 1, 0),
+		Size = UDim2.new(1, 0, 0, 34),
+	}, Main)
+	RoundOuterCorner(Bottombar, WINDOW_RADIUS, "bottom")
+
+	New("Frame", {
+		BackgroundColor3 = Theme.StrokeSoft,
+		BorderSizePixel = 0,
+		Size = UDim2.new(1, 0, 0, 1),
+	}, Bottombar)
+
+	local function Pill(parent, opts)
+		local frame = New(opts.Clickable and "TextButton" or "Frame", {
+			Name = opts.Name or "Pill",
+			LayoutOrder = opts.LayoutOrder or 1,
+			BackgroundColor3 = Theme.Element,
+			BackgroundTransparency = 0.15,
+			BorderSizePixel = 0,
+			AutomaticSize = Enum.AutomaticSize.X,
+			Size = UDim2.new(0, 0, 0, 22),
+			ClipsDescendants = true,
+		}, parent)
+		if opts.Clickable then
+			frame.Text = ""
+			frame.AutoButtonColor = false
+		end
+		New("UICorner", { CornerRadius = UDim.new(1, 0) }, frame)
+		Stroke(frame, Theme.Stroke, 1, 0.35)
+		Padding(frame, opts.Icon and 9 or 13, 13, 0, 0)
+
+		New("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal,
+			VerticalAlignment = Enum.VerticalAlignment.Center,
+			Padding = UDim.new(0, 6),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}, frame)
+
+		local icon
+		if opts.Icon then
+			icon = New("ImageLabel", {
+				LayoutOrder = 1,
+				BackgroundTransparency = 1,
+				Size = UDim2.new(0, 12, 0, 12),
+				ImageColor3 = Theme.SubText,
+			}, frame)
+			if opts.RawIcon then
+				icon.Image = opts.Icon
+			else
+				ApplyIcon(icon, opts.Icon, 48)
+			end
+		end
+
+		local label = New("TextLabel", {
+			LayoutOrder = 2,
+			BackgroundTransparency = 1,
+			AutomaticSize = Enum.AutomaticSize.X,
+			Size = UDim2.new(0, 0, 1, 0),
+			Font = Theme.Font,
+			Text = opts.Text or "",
+			TextColor3 = Theme.SubText,
+			TextSize = 11,
+		}, frame)
+
+		return frame, label, icon
+	end
+
+	local DiscordPill, DiscordLabel, DiscordIcon = Pill(Bottombar, {
+		Name = "Discord",
+		Icon = DISCORD_ICON,
+		RawIcon = true,
+		Text = discord,
+		Clickable = true,
+	})
+	DiscordPill.AnchorPoint = Vector2.new(0, 0.5)
+	DiscordPill.Position = UDim2.new(0, 11, 0.5, 1)
+
+	DiscordPill.MouseEnter:Connect(function()
+		Tween(DiscordPill, QUICK, { BackgroundTransparency = 0 })
+		Tween(DiscordIcon, QUICK, { ImageColor3 = Theme.Text })
+		Tween(DiscordLabel, QUICK, { TextColor3 = Theme.Text })
+	end)
+	DiscordPill.MouseLeave:Connect(function()
+		Tween(DiscordPill, QUICK, { BackgroundTransparency = 0.15 })
+		Tween(DiscordIcon, QUICK, { ImageColor3 = Theme.SubText })
+		Tween(DiscordLabel, QUICK, { TextColor3 = Theme.SubText })
+	end)
+	DiscordPill.MouseButton1Click:Connect(function()
+		if CopyToClipboard(discord) then
+			Sena:Notify({ Title = "Copied", Content = discord, Icon = "clipboard-check", Duration = 3 })
+		else
+			Sena:Notify({ Title = "Discord", Content = discord, Icon = "link", Duration = 5 })
+		end
+	end)
+
+	local RightStrip = New("Frame", {
+		Name = "Status",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -11, 0.5, 1),
+		Size = UDim2.new(0, 0, 0, 22),
+		AutomaticSize = Enum.AutomaticSize.X,
+		BackgroundTransparency = 1,
+	}, Bottombar)
+
+	New("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal,
+		HorizontalAlignment = Enum.HorizontalAlignment.Right,
+		VerticalAlignment = Enum.VerticalAlignment.Center,
+		Padding = UDim.new(0, 8),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, RightStrip)
+
+	local _, ExecutorLabel = Pill(RightStrip, {
+		Name = "Executor",
+		LayoutOrder = 1,
+		Icon = "terminal",
+		Text = "Executor : " .. GetExecutorName(),
+	})
+
+	local _, FpsLabel = Pill(RightStrip, {
+		Name = "Fps",
+		LayoutOrder = 2,
+		Icon = "activity",
+		Text = "-- FPS",
+	})
+
+	if version ~= "" then
+		Pill(RightStrip, { Name = "Version", LayoutOrder = 3, Text = version })
+	end
+
+	task.spawn(function()
+		local frames, elapsed = 0, 0
+		local connection
+		connection = RunService.RenderStepped:Connect(function(delta)
+			if not FpsLabel.Parent then
+				connection:Disconnect()
+				return
+			end
+
+			frames += 1
+			elapsed += delta
+			if elapsed >= 1 then
+				FpsLabel.Text = tostring(math.floor(frames / elapsed + 0.5)) .. " FPS"
+				frames, elapsed = 0, 0
+			end
+		end)
+	end)
+
+	MakeDraggable(Topbar, Main)
+	MakeDraggable(Brand, Main)
+
+	local IsOpen = true
+
+	local FloatButton = New("ImageButton", {
+		Name = "SenaFloat",
+		AnchorPoint = Vector2.new(0, 0),
+		Position = UDim2.new(0, 20, 0, 20),
+		Size = UDim2.new(0, 46, 0, 46),
+		BackgroundColor3 = Theme.Sidebar,
+		BorderSizePixel = 0,
+		Image = "",
+		AutoButtonColor = false,
+		Visible = false,
+	}, ScreenGui)
+	Corner(FloatButton, 23)
+	Stroke(FloatButton, Theme.Stroke, 1)
+
+	local FloatLabel = New("TextLabel", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.5, 0),
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency = 1,
+		Font = Theme.FontBold,
+		Text = title:sub(1, 1):upper(),
+		TextColor3 = Theme.Text,
+		TextSize = 19,
+	}, FloatButton)
+
+	if logo ~= "" then
+		FloatLabel.Text = ""
+		local floatIcon = New("ImageLabel", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, 0, 0.5, 0),
+			Size = UDim2.new(0, 22, 0, 22),
+			BackgroundTransparency = 1,
+			ImageColor3 = Theme.Text,
+		}, FloatButton)
+		ApplyIcon(floatIcon, logo, 48)
+	end
+
+	MakeDraggable(FloatButton, FloatButton)
+
+	local function SetOpen(state)
+		IsOpen = state
+
+		if state then
+			Main.Visible = true
+			FloatButton.Visible = false
+			Scale.Scale = 0.94
+			Tween(Scale, SMOOTH, { Scale = 1 })
+		else
+			Tween(Scale, QUICK, { Scale = 0.94 })
+			task.delay(0.16, function()
+				if not IsOpen then
+					Main.Visible = false
+					FloatButton.Visible = true
+				end
+			end)
+		end
+	end
+
+	MiniButton.MouseButton1Click:Connect(function() SetOpen(false) end)
+	FloatButton.MouseButton1Click:Connect(function() SetOpen(true) end)
+
+	CloseButton.MouseButton1Click:Connect(function()
+		Window:Destroy()
+	end)
+
+	UserInputService.InputBegan:Connect(function(input, processed)
+		if processed then return end
+		if input.KeyCode == toggleKey then
+			SetOpen(not IsOpen)
+		end
+	end)
+
+	function Window:Toggle(state)
+		if state == nil then state = not IsOpen end
+		SetOpen(state)
+	end
+
+	function Window:Destroy()
+		Sena.Unloaded = true
+		Tween(Scale, QUICK, { Scale = 0.9 })
+		task.delay(0.18, function()
+			pcall(function() ScreenGui:Destroy() end)
+			if NotifyGui then pcall(function() NotifyGui:Destroy() end) end
+		end)
+	end
+	Window.Unload = Window.Destroy
+
+	function Window:Notify(cfg) return Sena:Notify(cfg) end
+
+	local ConfigSystem
+	do
+		local HasFiles = type(writefile) == "function"
+			and type(readfile) == "function"
+			and type(isfile) == "function"
+			and type(isfolder) == "function"
+			and type(makefolder) == "function"
+			and type(listfiles) == "function"
+
+		local function Sanitize(name)
+			return (tostring(name or "")
+				:gsub("[\\/:*?\"<>|]", "")
+				:gsub("^%s+", "")
+				:gsub("%s+$", ""))
+		end
+
+		local gameKey = "0"
+		pcall(function()
+			gameKey = tostring(game.GameId ~= 0 and game.GameId or game.PlaceId)
+		end)
+
+		local folderTitle = Sanitize(title)
+		local folder = tostring(config.ConfigFolder
+			or ("Sena/" .. (folderTitle ~= "" and folderTitle or "Hub") .. "/" .. gameKey))
+
+		ConfigSystem = {
+			Enabled = config.SaveConfig ~= false,
+			Folder = folder,
+			HasFiles = HasFiles,
+			Elements = {},
+			Order = {},
+			Pending = nil,
+			Current = "",
+			Memory = {},
+			MemoryAutoLoad = "",
+		}
+
+		local autoLoadPath = folder .. "/autoload.txt"
+		local function ConfigPath(name)
+			return folder .. "/configs/" .. name .. ".json"
+		end
+
+		local function EnsureFolders()
+			if not HasFiles then return false end
+			return (pcall(function()
+				local path = ""
+				for part in (folder .. "/configs"):gmatch("[^/\\]+") do
+					path = path == "" and part or (path .. "/" .. part)
+					if not isfolder(path) then makefolder(path) end
+				end
+			end))
+		end
+
+		function ConfigSystem:Register(key, funcs)
+			if not key or key == "" or self.Elements[key] then return end
+
+			self.Elements[key] = funcs
+			table.insert(self.Order, key)
+
+			if self.Pending ~= nil and self.Pending[key] ~= nil then
+				task.spawn(function()
+					pcall(funcs.Set, self.Pending[key])
+				end)
+			end
+		end
+
+		function ConfigSystem:Collect()
+			local data = {}
+			for _, key in ipairs(self.Order) do
+				local funcs = self.Elements[key]
+				if funcs then
+					local ok, value = pcall(funcs.Get)
+					if ok and value ~= nil then data[key] = value end
+				end
+			end
+			return data
+		end
+
+		function ConfigSystem:Apply(data)
+			if type(data) ~= "table" then return false end
+			self.Pending = data
+
+			for _, key in ipairs(self.Order) do
+				local funcs = self.Elements[key]
+				local value = data[key]
+				if funcs and value ~= nil then
+					task.spawn(function()
+						pcall(funcs.Set, value)
+					end)
+				end
+			end
+
+			return true
+		end
+
+		function ConfigSystem:GetConfigs()
+			local list = {}
+
+			if HasFiles then
+				pcall(function()
+					EnsureFolders()
+					for _, path in ipairs(listfiles(folder .. "/configs")) do
+						local name = tostring(path):match("([^/\\]+)%.json$")
+						if name then table.insert(list, name) end
+					end
+				end)
+			else
+				for name in pairs(self.Memory) do
+					table.insert(list, name)
+				end
+			end
+
+			table.sort(list)
+			return list
+		end
+
+		function ConfigSystem:Save(name)
+			name = Sanitize(name)
+			if name == "" then return false, "Name is empty." end
+
+			local ok, encoded = pcall(function()
+				return HttpService:JSONEncode({ Name = name, Data = self:Collect() })
+			end)
+			if not ok then return false, "Failed to encode config." end
+
+			if HasFiles then
+				EnsureFolders()
+				local written = pcall(function()
+					writefile(ConfigPath(name), encoded)
+				end)
+				if not written then return false, "Failed to write file." end
+			else
+				self.Memory[name] = encoded
+			end
+
+			self.Current = name
+			return true
+		end
+
+		function ConfigSystem:Read(name)
+			name = Sanitize(name)
+			if name == "" then return nil end
+
+			local raw
+			if HasFiles then
+				local ok, contents = pcall(function()
+					if isfile(ConfigPath(name)) then return readfile(ConfigPath(name)) end
+					return nil
+				end)
+				raw = ok and contents or nil
+			else
+				raw = self.Memory[name]
+			end
+
+			if not raw then return nil end
+
+			local ok, decoded = pcall(function()
+				return HttpService:JSONDecode(raw)
+			end)
+			if not ok or type(decoded) ~= "table" then return nil end
+
+			return type(decoded.Data) == "table" and decoded.Data or decoded
+		end
+
+		function ConfigSystem:Load(name)
+			local data = self:Read(name)
+			if not data then return false, "Config not found." end
+
+			self.Current = Sanitize(name)
+			self:Apply(data)
+			return true
+		end
+
+		function ConfigSystem:Delete(name)
+			name = Sanitize(name)
+			if name == "" then return false end
+
+			local removed = false
+			if HasFiles then
+				pcall(function()
+					if isfile(ConfigPath(name)) then
+						if type(delfile) == "function" then
+							delfile(ConfigPath(name))
+						else
+							writefile(ConfigPath(name), "")
+						end
+						removed = true
+					end
+				end)
+			elseif self.Memory[name] then
+				self.Memory[name] = nil
+				removed = true
+			end
+
+			if removed and self:GetAutoLoad() == name then
+				self:SetAutoLoad(name, false)
+			end
+			if self.Current == name then self.Current = "" end
+
+			return removed
+		end
+
+		function ConfigSystem:GetAutoLoad()
+			if not HasFiles then return self.MemoryAutoLoad end
+
+			local ok, contents = pcall(function()
+				if isfile(autoLoadPath) then return readfile(autoLoadPath) end
+				return ""
+			end)
+			return ok and Sanitize(contents) or ""
+		end
+
+		function ConfigSystem:SetAutoLoad(name, enabled)
+			name = Sanitize(name)
+			local value = enabled and name or ""
+
+			if not HasFiles then
+				self.MemoryAutoLoad = value
+				return true
+			end
+
+			EnsureFolders()
+			return (pcall(function() writefile(autoLoadPath, value) end))
+		end
+
+		function ConfigSystem:Export()
+			local ok, encoded = pcall(function()
+				return HttpService:JSONEncode(self:Collect())
+			end)
+			return ok and encoded or nil
+		end
+
+		function ConfigSystem:Import(text)
+			local ok, decoded = pcall(function()
+				return HttpService:JSONDecode(tostring(text or ""))
+			end)
+			if not ok or type(decoded) ~= "table" then return false end
+			return self:Apply(type(decoded.Data) == "table" and decoded.Data or decoded)
+		end
+	end
+
+	Window.ConfigSystem = ConfigSystem
+
+	function Window:SaveConfig(name) return ConfigSystem:Save(name) end
+	function Window:LoadConfig(name) return ConfigSystem:Load(name) end
+	function Window:DeleteConfig(name) return ConfigSystem:Delete(name) end
+	function Window:GetConfigs() return ConfigSystem:GetConfigs() end
+	function Window:SetAutoLoadConfig(name, enabled)
+		return ConfigSystem:SetAutoLoad(name, enabled ~= false)
+	end
+	function Window:GetAutoLoadConfig() return ConfigSystem:GetAutoLoad() end
+	function Window:ExportConfig() return ConfigSystem:Export() or "" end
+	function Window:ImportConfig(text) return ConfigSystem:Import(text) end
+
+	local SearchEntries = {}
+
+	local function Normalize(text)
+		return string.lower(tostring(text or ""))
+	end
+
+	local function RegisterSearch(row, section, tabKey, text)
+		table.insert(SearchEntries, {
+			Row = row,
+			Section = section,
+			TabKey = tabKey,
+			Text = Normalize(text),
+		})
+	end
+
+	local function RunSearch()
+		local query = Normalize(SearchBox.Text)
+		local sectionsSeen = {}
+
+		for _, entry in ipairs(SearchEntries) do
+			if entry.TabKey == Window.CurrentTab then
+				local match = query == "" or entry.Text:find(query, 1, true) ~= nil
+				entry.Row.Visible = match
+				if entry.Section then
+					sectionsSeen[entry.Section] = (sectionsSeen[entry.Section] or false) or match
+				end
+			end
+		end
+
+		for section, anyMatch in pairs(sectionsSeen) do
+			section.Frame.Visible = (query == "") or anyMatch
+			if query ~= "" and anyMatch and not section.Open then
+				section:SetOpen(true, true)
+			end
+		end
+	end
+
+	SearchBox:GetPropertyChangedSignal("Text"):Connect(RunSearch)
+
+	local TabOrder = 0
+	local TabButtons = {}
+
+	local function SelectTab(key)
+		for tabKey, tab in pairs(Window.Tabs) do
+			local active = tabKey == key
+			tab.Page.Visible = active
+
+			local button = TabButtons[tabKey]
+			if button then
+				Tween(button.Frame, QUICK, {
+					BackgroundTransparency = active and 0 or 1,
+				})
+				Tween(button.Label, QUICK, {
+					TextColor3 = active and Theme.Text or Theme.SubText,
+				})
+				Tween(button.Icon, QUICK, {
+					ImageColor3 = active and Theme.Text or Theme.Dim,
+				})
+				Tween(button.Marker, QUICK, {
+					BackgroundTransparency = active and 0 or 1,
+					Size = UDim2.new(0, 2, 0, active and 14 or 4),
+				})
+			end
+
+			if active then
+				Window.CurrentTab = tabKey
+				PageTitle.Text = tab.Title
+				PageDesc.Text = tab.Description
+				PageDesc.Visible = tab.Description ~= ""
+				PageTitle.Position = UDim2.new(0, 16, 0, tab.Description ~= "" and 9 or 16)
+			end
+		end
+
+		RunSearch()
+	end
+
+	function Window:SelectTab(name) SelectTab(Normalize(name)) end
+	function Window:GetCurrentTab() return Window.CurrentTab end
+
+	function Window:CreateTab(cfg)
+		cfg = cfg or {}
+		if type(cfg) == "string" then cfg = { Title = cfg } end
+
+		local tabTitle = tostring(cfg.Title or cfg[1] or "Tab")
+		local tabIcon  = cfg.Icon or cfg[2]
+		local tabDesc  = tostring(cfg.Description or cfg.SubTitle or "")
+		local key      = Normalize(tabTitle)
+
+		if Window.Tabs[key] then return Window.Tabs[key].Api end
+
+		TabOrder = TabOrder + 1
+
+		local ButtonFrame = New("TextButton", {
+			Name = tabTitle,
+			LayoutOrder = TabOrder,
+			BackgroundColor3 = Theme.Element,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Size = UDim2.new(1, 0, 0, 30),
+			Text = "",
+			AutoButtonColor = false,
+		}, TabList)
+		Corner(ButtonFrame, 6)
+
+		local Marker = New("Frame", {
+			BackgroundColor3 = Theme.Accent,
+			BorderSizePixel = 0,
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = UDim2.new(0, 0, 0.5, 0),
+			Size = UDim2.new(0, 2, 0, 4),
+			BackgroundTransparency = 1,
+		}, ButtonFrame)
+		Corner(Marker, 2)
+
+		local ButtonIcon = New("ImageLabel", {
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = UDim2.new(0, 10, 0.5, 0),
+			Size = UDim2.new(0, 14, 0, 14),
+			BackgroundTransparency = 1,
+			ImageColor3 = Theme.Dim,
+		}, ButtonFrame)
+		ApplyIcon(ButtonIcon, tabIcon, 48)
+
+		local hasIcon = ButtonIcon.Image ~= ""
+		ButtonIcon.Visible = hasIcon
+
+		local ButtonLabel = New("TextLabel", {
+			BackgroundTransparency = 1,
+			Position = UDim2.new(0, hasIcon and 32 or 12, 0, 0),
+			Size = UDim2.new(1, -(hasIcon and 40 or 20), 1, 0),
+			Font = Theme.Font,
+			Text = tabTitle,
+			TextColor3 = Theme.SubText,
+			TextSize = 12,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+		}, ButtonFrame)
+
+		ButtonFrame.MouseEnter:Connect(function()
+			if Window.CurrentTab ~= key then
+				Tween(ButtonFrame, QUICK, { BackgroundTransparency = 0.5 })
+				Tween(ButtonLabel, QUICK, { TextColor3 = Theme.Text })
+			end
+		end)
+		ButtonFrame.MouseLeave:Connect(function()
+			if Window.CurrentTab ~= key then
+				Tween(ButtonFrame, QUICK, { BackgroundTransparency = 1 })
+				Tween(ButtonLabel, QUICK, { TextColor3 = Theme.SubText })
+			end
+		end)
+		ButtonFrame.MouseButton1Click:Connect(function() SelectTab(key) end)
+
+		TabButtons[key] = {
+			Frame = ButtonFrame,
+			Label = ButtonLabel,
+			Icon = ButtonIcon,
+			Marker = Marker,
+		}
+
+		local Page = New("ScrollingFrame", {
+			Name = tabTitle .. "Page",
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Size = UDim2.new(1, 0, 1, 0),
+			CanvasSize = UDim2.new(0, 0, 0, 0),
+			ScrollBarThickness = 2,
+			ScrollBarImageColor3 = Theme.Track,
+			ScrollingDirection = Enum.ScrollingDirection.Y,
+			Visible = false,
+		}, Content)
+		Padding(Page, 12, 10, 12, 12)
+
+		local Holder = New("Frame", {
+			Name = "Holder",
+			BackgroundTransparency = 1,
+			Size = UDim2.new(1, 0, 0, 0),
+		}, Page)
+
+		local LeftColumn = New("Frame", {
+			Name = "Left",
+			BackgroundTransparency = 1,
+			Position = UDim2.new(0, 0, 0, 0),
+			Size = UDim2.new(0.5, -5, 0, 0),
+		}, Holder)
+
+		local RightColumn = New("Frame", {
+			Name = "Right",
+			BackgroundTransparency = 1,
+			Position = UDim2.new(0.5, 5, 0, 0),
+			Size = UDim2.new(0.5, -5, 0, 0),
+		}, Holder)
+
+		local LeftLayout = New("UIListLayout", {
+			Padding = UDim.new(0, 10),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}, LeftColumn)
+
+		local RightLayout = New("UIListLayout", {
+			Padding = UDim.new(0, 10),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}, RightColumn)
+
+		local singleColumn = cfg.Columns == 1 or cfg.SingleColumn == true
+		if singleColumn then
+			RightColumn.Visible = false
+		end
+
+		local function Relayout()
+			local leftH = LeftLayout.AbsoluteContentSize.Y
+			local rightH = singleColumn and 0 or RightLayout.AbsoluteContentSize.Y
+
+			if singleColumn then
+				LeftColumn.Size = UDim2.new(1, 0, 0, leftH)
+			else
+				LeftColumn.Size = UDim2.new(0.5, -5, 0, leftH)
+				RightColumn.Size = UDim2.new(0.5, -5, 0, rightH)
+			end
+
+			local tallest = math.max(leftH, rightH)
+			Holder.Size = UDim2.new(1, 0, 0, tallest)
+			Page.CanvasSize = UDim2.new(0, 0, 0, tallest + 24)
+		end
+
+		LeftLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(Relayout)
+		RightLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(Relayout)
+
+		local Tab = {
+			Title = tabTitle,
+			Description = tabDesc,
+			Key = key,
+			Page = Page,
+			Left = LeftColumn,
+			Right = RightColumn,
+			SectionCount = 0,
+		}
+
+		local TabApi = {}
+		Tab.Api = TabApi
+		Window.Tabs[key] = Tab
+
+		function TabApi:AddSection(sectionCfg)
+			sectionCfg = sectionCfg or {}
+			if type(sectionCfg) == "string" then sectionCfg = { Title = sectionCfg } end
+
+			local secTitle = tostring(sectionCfg.Title or sectionCfg[1] or "Section")
+			local secIcon  = sectionCfg.Icon or sectionCfg[2]
+			local side     = tostring(sectionCfg.Side or sectionCfg.Column or ""):lower()
+			local startOpen = sectionCfg.Open
+			if startOpen == nil then startOpen = true end
+
+			Tab.SectionCount = Tab.SectionCount + 1
+
+			local parentColumn
+			if singleColumn then
+				parentColumn = LeftColumn
+			elseif side == "right" or side == "r" then
+				parentColumn = RightColumn
+			elseif side == "left" or side == "l" then
+				parentColumn = LeftColumn
+			else
+
+				parentColumn = (Tab.SectionCount % 2 == 1) and LeftColumn or RightColumn
+			end
+
+			local SectionFrame = New("Frame", {
+				Name = secTitle,
+				LayoutOrder = Tab.SectionCount,
+				BackgroundColor3 = Theme.Card,
+				BorderSizePixel = 0,
+				Size = UDim2.new(1, 0, 0, 34),
+				ClipsDescendants = true,
+			}, parentColumn)
+			Corner(SectionFrame, 8)
+			Stroke(SectionFrame, Theme.StrokeSoft, 1)
+
+			local Header = New("TextButton", {
+				Name = "Header",
+				BackgroundTransparency = 1,
+				Size = UDim2.new(1, 0, 0, 34),
+				Text = "",
+				AutoButtonColor = false,
+			}, SectionFrame)
+
+			local HeaderIcon = New("ImageLabel", {
+				AnchorPoint = Vector2.new(0, 0.5),
+				Position = UDim2.new(0, 11, 0.5, 0),
+				Size = UDim2.new(0, 13, 0, 13),
+				BackgroundTransparency = 1,
+				ImageColor3 = Theme.SubText,
+			}, Header)
+			ApplyIcon(HeaderIcon, secIcon, 48)
+
+			local headerHasIcon = HeaderIcon.Image ~= ""
+			HeaderIcon.Visible = headerHasIcon
+
+			New("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.new(0, headerHasIcon and 32 or 12, 0, 0),
+				Size = UDim2.new(1, -(headerHasIcon and 58 or 38), 1, 0),
+				Font = Theme.FontBold,
+				Text = secTitle,
+				TextColor3 = Theme.Text,
+				TextSize = 12,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+			}, Header)
+
+			local Chevron = New("ImageLabel", {
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, -11, 0.5, 0),
+				Size = UDim2.new(0, 12, 0, 12),
+				BackgroundTransparency = 1,
+				ImageColor3 = Theme.Dim,
+			}, Header)
+			ApplyIcon(Chevron, "chevron-down", 48)
+
+			local Body = New("Frame", {
+				Name = "Body",
+				BackgroundTransparency = 1,
+				Position = UDim2.new(0, 0, 0, 32),
+				Size = UDim2.new(1, 0, 0, 0),
+				ClipsDescendants = true,
+			}, SectionFrame)
+
+			local BodyList = New("Frame", {
+				Name = "List",
+				BackgroundTransparency = 1,
+				Size = UDim2.new(1, 0, 0, 0),
+			}, Body)
+			Padding(BodyList, 10, 10, 0, 0)
+
+			local BodyLayout = New("UIListLayout", {
+				Padding = UDim.new(0, 6),
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			}, BodyList)
+
+			local Section = { Frame = SectionFrame, Open = startOpen }
+			local itemOrder = 0
+
+			local function Resize(instant)
+				local contentH = BodyLayout.AbsoluteContentSize.Y
+				local bodyH = contentH > 0 and (contentH + 12) or 0
+				BodyList.Size = UDim2.new(1, 0, 0, contentH)
+				Body.Size = UDim2.new(1, 0, 0, Section.Open and bodyH or 0)
+
+				local total = 32 + (Section.Open and bodyH or 0)
+				if instant then
+					SectionFrame.Size = UDim2.new(1, 0, 0, total)
+				else
+					Tween(SectionFrame, SMOOTH, { Size = UDim2.new(1, 0, 0, total) })
+				end
+			end
+
+			Section.Resize = Resize
+
+			function Section:SetOpen(state, instant)
+				Section.Open = state and true or false
+				Tween(Chevron, QUICK, { Rotation = Section.Open and 0 or -90 })
+				Resize(instant)
+			end
+
+			BodyLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+				Resize(true)
+			end)
+
+			Header.MouseButton1Click:Connect(function()
+				Section:SetOpen(not Section.Open)
+			end)
+
+			Section:SetOpen(startOpen, true)
+
+			local Elements = {}
+
+			local function BuildRow(name, rowTitle, rowDesc, reservedRight, extraBottom)
+				itemOrder = itemOrder + 1
+
+				local Row = New("Frame", {
+					Name = name,
+					LayoutOrder = itemOrder,
+					BackgroundColor3 = Theme.Element,
+					BorderSizePixel = 0,
+					Size = UDim2.new(1, 0, 0, 34),
+				}, BodyList)
+				Corner(Row, 6)
+
+				local TitleLabel = New("TextLabel", {
+					Name = "Title",
+					BackgroundTransparency = 1,
+					Position = UDim2.new(0, 10, 0, ROW_PAD),
+					Size = UDim2.new(1, -10 - reservedRight, 0, TITLE_H),
+					Font = Theme.Font,
+					Text = rowTitle,
+					TextColor3 = Theme.Text,
+					TextSize = 12,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+				}, Row)
+
+				local DescLabel
+				if rowDesc ~= "" then
+					DescLabel = New("TextLabel", {
+						Name = "Desc",
+						BackgroundTransparency = 1,
+						Position = UDim2.new(0, 10, 0, ROW_PAD + TITLE_H + 1),
+						Size = UDim2.new(1, -10 - reservedRight, 0, DESC_LINE),
+						Font = Theme.FontBody,
+						Text = rowDesc,
+						TextColor3 = Theme.SubText,
+						TextSize = 11,
+						TextXAlignment = Enum.TextXAlignment.Left,
+						TextYAlignment = Enum.TextYAlignment.Top,
+						TextWrapped = true,
+					}, Row)
+				end
+
+				local extra = 0
+				local function SetExtra(value)
+					extra = value or 0
+				end
+
+				local function Recalculate()
+					local width = Row.AbsoluteSize.X - 10 - reservedRight
+					local lines = DescLabel and CountLines(rowDesc, width, Theme.FontBody, 11, 3) or 0
+
+					if DescLabel then
+						DescLabel.Size = UDim2.new(1, -10 - reservedRight, 0, lines * DESC_LINE)
+					end
+
+					local base = ROW_PAD + TITLE_H + (lines > 0 and (1 + lines * DESC_LINE) or 0) + ROW_PAD
+					if lines == 0 then base = 34 end
+
+					Row.Size = UDim2.new(1, 0, 0, base + (extraBottom or 0) + extra)
+				end
+
+				Row:GetPropertyChangedSignal("AbsoluteSize"):Connect(Recalculate)
+				task.defer(Recalculate)
+
+				return Row, TitleLabel, DescLabel, Recalculate, SetExtra
+			end
+
+			local function Hoverable(row)
+				row.MouseEnter:Connect(function()
+					Tween(row, QUICK, { BackgroundColor3 = Theme.ElementHover })
+				end)
+				row.MouseLeave:Connect(function()
+					Tween(row, QUICK, { BackgroundColor3 = Theme.Element })
+				end)
+			end
+
+			local function ClickCatcher(row)
+				return New("TextButton", {
+					Name = "Click",
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 1, 0),
+					Text = "",
+					AutoButtonColor = false,
+					ZIndex = 3,
+				}, row)
+			end
+
+			local function Register(row, text)
+				RegisterSearch(row, Section, key, text)
+			end
+
+			local function Bind(flag, funcs)
+				if flag then Sena.Flags[flag] = funcs end
+			end
+
+			local function SaveState(itemTitle, itemCfg, funcs, getter, setter)
+				if not ConfigSystem.Enabled then return end
+				if type(itemCfg) == "table"
+					and (itemCfg.NoConfig == true or itemCfg.SaveConfig == false) then
+					return
+				end
+
+				local configKey = (type(itemCfg) == "table" and itemCfg.Flag)
+					or (key .. "/" .. secTitle .. "/" .. tostring(itemTitle))
+
+				ConfigSystem:Register(configKey, {
+					Get = getter or function() return funcs:Get() end,
+					Set = setter or function(value) funcs:Set(value) end,
+				})
+			end
+
+			function Elements:AddParagraph(itemCfg)
+				itemCfg = itemCfg or {}
+				local pTitle   = tostring(itemCfg.Title or itemCfg[1] or "")
+				local pContent = tostring(itemCfg.Content or itemCfg.Description or itemCfg[2] or "")
+
+				itemOrder = itemOrder + 1
+
+				local Row = New("Frame", {
+					Name = "Paragraph",
+					LayoutOrder = itemOrder,
+					BackgroundColor3 = Theme.Element,
+					BackgroundTransparency = 0.35,
+					BorderSizePixel = 0,
+					Size = UDim2.new(1, 0, 0, 34),
+				}, BodyList)
+				Corner(Row, 6)
+
+				local Accent = New("Frame", {
+					BackgroundColor3 = Theme.Track,
+					BorderSizePixel = 0,
+					Position = UDim2.new(0, 0, 0, 8),
+					Size = UDim2.new(0, 2, 1, -16),
+				}, Row)
+				Corner(Accent, 2)
+
+				local TitleLabel = New("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.new(0, 12, 0, ROW_PAD),
+					Size = UDim2.new(1, -22, 0, TITLE_H),
+					Font = Theme.FontBold,
+					Text = pTitle,
+					TextColor3 = Theme.Text,
+					TextSize = 12,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+					Visible = pTitle ~= "",
+				}, Row)
+
+				local ContentLabel = New("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.new(0, 12, 0, pTitle ~= "" and (ROW_PAD + TITLE_H + 2) or ROW_PAD),
+					Size = UDim2.new(1, -22, 0, DESC_LINE),
+					Font = Theme.FontBody,
+					Text = pContent,
+					TextColor3 = Theme.SubText,
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextYAlignment = Enum.TextYAlignment.Top,
+					TextWrapped = true,
+				}, Row)
+
+				local function Recalculate()
+					local width = Row.AbsoluteSize.X - 22
+					local lines = pContent ~= "" and CountLines(pContent, width, Theme.FontBody, 11, 12) or 0
+					ContentLabel.Size = UDim2.new(1, -22, 0, lines * DESC_LINE)
+					ContentLabel.Visible = lines > 0
+
+					local top = pTitle ~= "" and (ROW_PAD + TITLE_H + 2) or ROW_PAD
+					ContentLabel.Position = UDim2.new(0, 12, 0, top)
+
+					local height = top + lines * DESC_LINE + ROW_PAD
+					if lines == 0 then height = ROW_PAD + TITLE_H + ROW_PAD end
+					Row.Size = UDim2.new(1, 0, 0, height)
+				end
+
+				Row:GetPropertyChangedSignal("AbsoluteSize"):Connect(Recalculate)
+				task.defer(Recalculate)
+
+				Register(Row, pTitle .. " " .. pContent)
+
+				local funcs = {}
+				function funcs:Set(newCfg)
+					newCfg = newCfg or {}
+					if newCfg.Title ~= nil then
+						pTitle = tostring(newCfg.Title)
+						TitleLabel.Text = pTitle
+						TitleLabel.Visible = pTitle ~= ""
+					end
+					if newCfg.Content ~= nil or newCfg.Description ~= nil then
+						pContent = tostring(newCfg.Content or newCfg.Description)
+						ContentLabel.Text = pContent
+					end
+					Recalculate()
+				end
+				function funcs:Get() return pTitle, pContent end
+
+				return funcs
+			end
+
+			function Elements:AddSubSection(itemCfg)
+				local sTitle = type(itemCfg) == "table"
+					and tostring(itemCfg.Title or itemCfg[1] or "")
+					or tostring(itemCfg or "")
+
+				itemOrder = itemOrder + 1
+
+				local Row = New("Frame", {
+					Name = "SubSection",
+					LayoutOrder = itemOrder,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 22),
+				}, BodyList)
+
+				local Label = New("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.new(0, 2, 0, 6),
+					Size = UDim2.new(1, -4, 0, 14),
+					Font = Theme.FontBold,
+					Text = string.upper(sTitle),
+					TextColor3 = Theme.Dim,
+					TextSize = 10,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}, Row)
+
+				local funcs = {}
+				function funcs:Set(value)
+					sTitle = type(value) == "table" and tostring(value.Title or value[1] or "") or tostring(value or "")
+					Label.Text = string.upper(sTitle)
+				end
+				return funcs
+			end
+
+			function Elements:AddDivider()
+				itemOrder = itemOrder + 1
+
+				local Row = New("Frame", {
+					Name = "Divider",
+					LayoutOrder = itemOrder,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 9),
+				}, BodyList)
+
+				New("Frame", {
+					BackgroundColor3 = Theme.StrokeSoft,
+					BorderSizePixel = 0,
+					AnchorPoint = Vector2.new(0, 0.5),
+					Position = UDim2.new(0, 0, 0.5, 0),
+					Size = UDim2.new(1, 0, 0, 1),
+				}, Row)
+
+				return {}
+			end
+			Elements.AddSeparator = Elements.AddDivider
+			Elements.AddLine = Elements.AddDivider
+
+			function Elements:AddButton(itemCfg)
+				itemCfg = itemCfg or {}
+				local bTitle    = tostring(itemCfg.Title or itemCfg[1] or "Button")
+				local bDesc     = tostring(itemCfg.Description or itemCfg.Content or itemCfg[2] or "")
+				local callback  = itemCfg.Callback or itemCfg[3] or function() end
+
+				local Row, TitleLabel, _, Recalculate = BuildRow("Button", bTitle, bDesc, 28, 0)
+				Hoverable(Row)
+
+				local Arrow = New("ImageLabel", {
+					AnchorPoint = Vector2.new(1, 0),
+					Position = UDim2.new(1, -10, 0, ROW_PAD + 1),
+					Size = UDim2.new(0, 12, 0, 12),
+					BackgroundTransparency = 1,
+					ImageColor3 = Theme.Dim,
+				}, Row)
+				ApplyIcon(Arrow, "chevron-right", 48)
+
+				local Click = ClickCatcher(Row)
+				Click.MouseButton1Click:Connect(function()
+					Tween(Arrow, QUICK, { Position = UDim2.new(1, -6, 0, ROW_PAD + 1) })
+					task.delay(0.12, function()
+						Tween(Arrow, QUICK, { Position = UDim2.new(1, -10, 0, ROW_PAD + 1) })
+					end)
+					task.spawn(function()
+						local ok, err = pcall(callback)
+						if not ok then warn("[Sena] Button callback error:", err) end
+					end)
+				end)
+
+				Register(Row, bTitle .. " " .. bDesc)
+
+				local funcs = {}
+				function funcs:Set(newCfg)
+					newCfg = newCfg or {}
+					if newCfg.Title then
+						bTitle = tostring(newCfg.Title)
+						TitleLabel.Text = bTitle
+					end
+					if newCfg.Callback then callback = newCfg.Callback end
+					Recalculate()
+				end
+				function funcs:Fire() task.spawn(callback) end
+
+				return funcs
+			end
+
+			function Elements:AddToggle(itemCfg)
+				itemCfg = itemCfg or {}
+				local tTitle   = tostring(itemCfg.Title or itemCfg[1] or "Toggle")
+				local tDesc    = tostring(itemCfg.Description or itemCfg.Content or itemCfg[2] or "")
+				local default  = itemCfg.Default or itemCfg[3] or false
+				local callback = itemCfg.Callback or itemCfg[4] or function() end
+				local flag     = itemCfg.Flag
+
+				local Row, TitleLabel, _, Recalculate = BuildRow("Toggle", tTitle, tDesc, 48, 0)
+				Hoverable(Row)
+
+				local Switch = New("Frame", {
+					AnchorPoint = Vector2.new(1, 0),
+					Position = UDim2.new(1, -10, 0, ROW_PAD - 1),
+					Size = UDim2.new(0, 32, 0, 17),
+					BackgroundColor3 = Theme.Track,
+					BorderSizePixel = 0,
+				}, Row)
+				Corner(Switch, 9)
+
+				local Knob = New("Frame", {
+					Position = UDim2.new(0, 3, 0.5, -6),
+					Size = UDim2.new(0, 12, 0, 12),
+					BackgroundColor3 = Theme.SubText,
+					BorderSizePixel = 0,
+				}, Switch)
+				Corner(Knob, 6)
+
+				local value = default and true or false
+				local funcs = { Value = value }
+
+				local function Render(animate)
+					local info = animate and QUICK or TweenInfo.new(0)
+					Tween(Switch, info, {
+						BackgroundColor3 = value and Theme.Accent or Theme.Track,
+					})
+					Tween(Knob, info, {
+						Position = value and UDim2.new(1, -15, 0.5, -6) or UDim2.new(0, 3, 0.5, -6),
+						BackgroundColor3 = value and Theme.AccentText or Theme.SubText,
+					})
+				end
+
+				local function SetValue(newValue, skipCallback)
+					value = newValue and true or false
+					funcs.Value = value
+					Render(true)
+					if not skipCallback then
+						task.spawn(function()
+							local ok, err = pcall(callback, value)
+							if not ok then warn("[Sena] Toggle callback error:", err) end
+						end)
+					end
+				end
+
+				local Click = ClickCatcher(Row)
+				Click.MouseButton1Click:Connect(function() SetValue(not value) end)
+
+				Render(false)
+				Register(Row, tTitle .. " " .. tDesc)
+
+				function funcs:Set(newValue, skipCallback) SetValue(newValue, skipCallback) end
+				function funcs:Get() return value end
+				function funcs:Toggle() SetValue(not value) end
+				Bind(flag, funcs)
+				SaveState(tTitle, itemCfg, funcs)
+
+				if default then
+					task.defer(function() SetValue(true) end)
+				end
+
+				return funcs
+			end
+
+			function Elements:AddSlider(itemCfg)
+				itemCfg = itemCfg or {}
+				local sTitle   = tostring(itemCfg.Title or itemCfg[1] or "Slider")
+				local sDesc    = tostring(itemCfg.Description or itemCfg.Content or itemCfg[2] or "")
+				local min      = tonumber(itemCfg.Min) or 0
+				local max      = tonumber(itemCfg.Max) or 100
+				local increment= tonumber(itemCfg.Increment or itemCfg.Step) or 1
+				local default  = tonumber(itemCfg.Default) or min
+				local suffix   = tostring(itemCfg.Suffix or "")
+				local callback = itemCfg.Callback or function() end
+				local flag     = itemCfg.Flag
+
+				local Row, TitleLabel, DescLabel, Recalculate = BuildRow("Slider", sTitle, sDesc, 74, 16)
+
+				local ValueLabel = New("TextLabel", {
+					AnchorPoint = Vector2.new(1, 0),
+					Position = UDim2.new(1, -10, 0, ROW_PAD),
+					Size = UDim2.new(0, 58, 0, TITLE_H),
+					BackgroundTransparency = 1,
+					Font = Theme.Font,
+					Text = tostring(default) .. suffix,
+					TextColor3 = Theme.SubText,
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Right,
+				}, Row)
+
+				local Track = New("Frame", {
+					AnchorPoint = Vector2.new(0, 1),
+					Position = UDim2.new(0, 10, 1, -10),
+					Size = UDim2.new(1, -20, 0, 4),
+					BackgroundColor3 = Theme.Track,
+					BorderSizePixel = 0,
+				}, Row)
+				Corner(Track, 2)
+
+				local Fill = New("Frame", {
+					Size = UDim2.new(0, 0, 1, 0),
+					BackgroundColor3 = Theme.Accent,
+					BorderSizePixel = 0,
+				}, Track)
+				Corner(Fill, 2)
+
+				local Knob = New("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.new(0, 0, 0.5, 0),
+					Size = UDim2.new(0, 10, 0, 10),
+					BackgroundColor3 = Theme.Accent,
+					BorderSizePixel = 0,
+					ZIndex = 4,
+				}, Track)
+				Corner(Knob, 5)
+
+				local value = math.clamp(default, min, max)
+				local funcs = { Value = value }
+
+				local function Snap(raw)
+					if increment <= 0 then return math.clamp(raw, min, max) end
+					local snapped = min + math.floor((raw - min) / increment + 0.5) * increment
+
+					snapped = tonumber(string.format("%.4f", snapped)) or snapped
+					return math.clamp(snapped, min, max)
+				end
+
+				local function Render(animate)
+					local alpha = (max - min) == 0 and 0 or (value - min) / (max - min)
+					local info = animate and QUICK or TweenInfo.new(0)
+					Tween(Fill, info, { Size = UDim2.new(alpha, 0, 1, 0) })
+					Tween(Knob, info, { Position = UDim2.new(alpha, 0, 0.5, 0) })
+					ValueLabel.Text = tostring(value) .. suffix
+				end
+
+				local function SetValue(newValue, skipCallback, animate)
+					value = Snap(tonumber(newValue) or min)
+					funcs.Value = value
+					Render(animate ~= false)
+					if not skipCallback then
+						task.spawn(function()
+							local ok, err = pcall(callback, value)
+							if not ok then warn("[Sena] Slider callback error:", err) end
+						end)
+					end
+				end
+
+				local Hit = New("TextButton", {
+					Name = "Hit",
+					AnchorPoint = Vector2.new(0, 1),
+					Position = UDim2.new(0, 6, 1, -4),
+					Size = UDim2.new(1, -12, 0, 16),
+					BackgroundTransparency = 1,
+					Text = "",
+					AutoButtonColor = false,
+					ZIndex = 5,
+				}, Row)
+
+				local dragging = false
+
+				local function UpdateFromX(x)
+					local trackPos = Track.AbsolutePosition.X
+					local trackSize = math.max(1, Track.AbsoluteSize.X)
+					local alpha = math.clamp((x - trackPos) / trackSize, 0, 1)
+					SetValue(min + alpha * (max - min), false, false)
+				end
+
+				Hit.InputBegan:Connect(function(input)
+					if input.UserInputType == Enum.UserInputType.MouseButton1
+						or input.UserInputType == Enum.UserInputType.Touch then
+						dragging = true
+						UpdateFromX(input.Position.X)
+						Tween(Knob, QUICK, { Size = UDim2.new(0, 13, 0, 13) })
+					end
+				end)
+
+				UserInputService.InputChanged:Connect(function(input)
+					if not dragging then return end
+					if input.UserInputType == Enum.UserInputType.MouseMovement
+						or input.UserInputType == Enum.UserInputType.Touch then
+						UpdateFromX(input.Position.X)
+					end
+				end)
+
+				UserInputService.InputEnded:Connect(function(input)
+					if not dragging then return end
+					if input.UserInputType == Enum.UserInputType.MouseButton1
+						or input.UserInputType == Enum.UserInputType.Touch then
+						dragging = false
+						Tween(Knob, QUICK, { Size = UDim2.new(0, 10, 0, 10) })
+					end
+				end)
+
+				task.defer(function() Render(false) end)
+				Register(Row, sTitle .. " " .. sDesc)
+
+				function funcs:Set(newValue, skipCallback) SetValue(newValue, skipCallback) end
+				function funcs:Get() return value end
+				Bind(flag, funcs)
+				SaveState(sTitle, itemCfg, funcs)
+
+				return funcs
+			end
+
+			function Elements:AddInput(itemCfg)
+				itemCfg = itemCfg or {}
+				local iTitle      = tostring(itemCfg.Title or itemCfg[1] or "Input")
+				local iDesc       = tostring(itemCfg.Description or itemCfg.Content or itemCfg[2] or "")
+				local default     = tostring(itemCfg.Default or itemCfg[3] or "")
+				local placeholder = tostring(itemCfg.Placeholder or itemCfg.PlaceholderText or "Value")
+				local numeric     = itemCfg.Numeric == true
+				local clearOnFocus= itemCfg.ClearOnFocus == true
+				local callback    = itemCfg.Callback or itemCfg[4] or function() end
+				local flag        = itemCfg.Flag
+
+				local boxWidth = tonumber(itemCfg.Width) or 96
+				local Row, TitleLabel, _, Recalculate = BuildRow("Input", iTitle, iDesc, boxWidth + 16, 0)
+				Hoverable(Row)
+
+				local Box = New("TextBox", {
+					AnchorPoint = Vector2.new(1, 0),
+					Position = UDim2.new(1, -10, 0, ROW_PAD - 3),
+					Size = UDim2.new(0, boxWidth, 0, 22),
+					BackgroundColor3 = Theme.Card,
+					BorderSizePixel = 0,
+					Font = Theme.FontBody,
+					Text = default,
+					PlaceholderText = placeholder,
+					PlaceholderColor3 = Theme.Dim,
+					TextColor3 = Theme.Text,
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					ClearTextOnFocus = clearOnFocus,
+					ZIndex = 3,
+				}, Row)
+				Corner(Box, 5)
+				Stroke(Box, Theme.Stroke, 1)
+				Padding(Box, 7, 7, 0, 0)
+
+				local value = default
+				local funcs = { Value = value }
+
+				local function Commit(text, skipCallback)
+					if numeric then
+						local n = tonumber(text)
+						text = n and tostring(n) or ""
+					end
+					value = text
+					funcs.Value = value
+					Box.Text = text
+					if not skipCallback then
+						task.spawn(function()
+							local ok, err = pcall(callback, numeric and (tonumber(value) or 0) or value)
+							if not ok then warn("[Sena] Input callback error:", err) end
+						end)
+					end
+				end
+
+				Box.Focused:Connect(function()
+					Tween(Box, QUICK, { BackgroundColor3 = Theme.Backdrop })
+				end)
+				Box.FocusLost:Connect(function(enter)
+					Tween(Box, QUICK, { BackgroundColor3 = Theme.Card })
+					Commit(Box.Text, false)
+				end)
+
+				Register(Row, iTitle .. " " .. iDesc)
+
+				function funcs:Set(newValue, skipCallback) Commit(tostring(newValue or ""), skipCallback) end
+				function funcs:Get() return numeric and (tonumber(value) or 0) or value end
+				Bind(flag, funcs)
+				SaveState(iTitle, itemCfg, funcs, function() return value end)
+
+				return funcs
+			end
+
+			function Elements:AddDropdown(itemCfg)
+				itemCfg = itemCfg or {}
+				local dTitle   = tostring(itemCfg.Title or itemCfg[1] or "Dropdown")
+				local dDesc    = tostring(itemCfg.Description or itemCfg.Content or itemCfg[2] or "")
+				local multi    = itemCfg.Multi == true or itemCfg.MultiSelect == true
+				local options  = itemCfg.Options or itemCfg.Values or {}
+				local default  = itemCfg.Default
+				local callback = itemCfg.Callback or function() end
+				local flag     = itemCfg.Flag
+				local maxList  = tonumber(itemCfg.MaxVisible) or 5
+
+				local Row, TitleLabel, _, Recalculate, SetExtra = BuildRow("Dropdown", dTitle, dDesc, 114, 0)
+
+				local Control = New("TextButton", {
+					Name = "Control",
+					AnchorPoint = Vector2.new(1, 0),
+					Position = UDim2.new(1, -10, 0, ROW_PAD - 3),
+					Size = UDim2.new(0, 98, 0, 22),
+					BackgroundColor3 = Theme.Card,
+					BorderSizePixel = 0,
+					Text = "",
+					AutoButtonColor = false,
+					ZIndex = 3,
+				}, Row)
+				Corner(Control, 5)
+				Stroke(Control, Theme.Stroke, 1)
+
+				local ControlLabel = New("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.new(0, 7, 0, 0),
+					Size = UDim2.new(1, -24, 1, 0),
+					Font = Theme.FontBody,
+					Text = "---",
+					TextColor3 = Theme.SubText,
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+					ZIndex = 4,
+				}, Control)
+
+				local ControlArrow = New("ImageLabel", {
+					AnchorPoint = Vector2.new(1, 0.5),
+					Position = UDim2.new(1, -6, 0.5, 0),
+					Size = UDim2.new(0, 10, 0, 10),
+					BackgroundTransparency = 1,
+					ImageColor3 = Theme.Dim,
+					ZIndex = 4,
+				}, Control)
+				ApplyIcon(ControlArrow, "chevron-down", 48)
+
+				local ListHolder = New("Frame", {
+					Name = "List",
+					BackgroundTransparency = 1,
+					AnchorPoint = Vector2.new(0, 1),
+					Position = UDim2.new(0, 10, 1, -8),
+					Size = UDim2.new(1, -20, 0, 0),
+					ClipsDescendants = true,
+					ZIndex = 3,
+				}, Row)
+
+				local ListScroll = New("ScrollingFrame", {
+					BackgroundColor3 = Theme.Card,
+					BackgroundTransparency = 0,
+					BorderSizePixel = 0,
+					Size = UDim2.new(1, 0, 1, 0),
+					CanvasSize = UDim2.new(0, 0, 0, 0),
+					ScrollBarThickness = 2,
+					ScrollBarImageColor3 = Theme.Track,
+					ZIndex = 3,
+				}, ListHolder)
+				Corner(ListScroll, 5)
+				Stroke(ListScroll, Theme.Stroke, 1)
+				Padding(ListScroll, 4, 4, 4, 4)
+
+				local ListLayout = New("UIListLayout", {
+					Padding = UDim.new(0, 3),
+					SortOrder = Enum.SortOrder.LayoutOrder,
+				}, ListScroll)
+
+				local selected = {}
+				local isOpen = false
+				local funcs = { Value = multi and {} or "", Options = options }
+
+				local function SelectedList()
+					local list = {}
+					for _, option in ipairs(options) do
+						if selected[tostring(option)] then
+							table.insert(list, tostring(option))
+						end
+					end
+					return list
+				end
+
+				local function UpdateLabel()
+					local list = SelectedList()
+					if #list == 0 then
+						ControlLabel.Text = "---"
+						ControlLabel.TextColor3 = Theme.Dim
+					else
+						ControlLabel.Text = table.concat(list, ", ")
+						ControlLabel.TextColor3 = Theme.Text
+					end
+				end
+
+				local rows = {}
+
+				local function RefreshRowVisuals()
+					for optionName, entry in pairs(rows) do
+						local on = selected[optionName] == true
+						Tween(entry.Frame, QUICK, {
+							BackgroundColor3 = on and Theme.ElementHover or Theme.Element,
+						})
+						Tween(entry.Label, QUICK, {
+							TextColor3 = on and Theme.Text or Theme.SubText,
+						})
+						entry.Check.Visible = on
+					end
+				end
+
+				local function FireCallback()
+					local list = SelectedList()
+					funcs.Value = multi and list or (list[1] or "")
+					task.spawn(function()
+						local ok, err = pcall(callback, multi and list or (list[1] or ""))
+						if not ok then warn("[Sena] Dropdown callback error:", err) end
+					end)
+				end
+
+				local function ListHeight()
+					local count = #options
+					if count == 0 then return 30 end
+					local visible = math.min(count, maxList)
+					return visible * 25 + (visible - 1) * 3 + 8
+				end
+
+				local function SetOpen(state)
+					isOpen = state and true or false
+					local height = isOpen and ListHeight() or 0
+					SetExtra(isOpen and (height + 8) or 0)
+					Tween(ControlArrow, QUICK, { Rotation = isOpen and 180 or 0 })
+					ListHolder.Size = UDim2.new(1, -20, 0, height)
+					Recalculate()
+					Section.Resize(true)
+				end
+
+				local function BuildRows()
+					for _, child in ipairs(ListScroll:GetChildren()) do
+						if child:IsA("TextButton") or child:IsA("TextLabel") then
+							child:Destroy()
+						end
+					end
+					rows = {}
+
+					if #options == 0 then
+						New("TextLabel", {
+							BackgroundTransparency = 1,
+							Size = UDim2.new(1, 0, 0, 22),
+							Font = Theme.FontBody,
+							Text = "No options",
+							TextColor3 = Theme.Dim,
+							TextSize = 11,
+							ZIndex = 4,
+						}, ListScroll)
+					end
+
+					for index, option in ipairs(options) do
+						local optionName = tostring(option)
+
+						local OptionFrame = New("TextButton", {
+							Name = optionName,
+							LayoutOrder = index,
+							BackgroundColor3 = Theme.Element,
+							BorderSizePixel = 0,
+							Size = UDim2.new(1, 0, 0, 25),
+							Text = "",
+							AutoButtonColor = false,
+							ZIndex = 4,
+						}, ListScroll)
+						Corner(OptionFrame, 4)
+
+						local OptionLabel = New("TextLabel", {
+							BackgroundTransparency = 1,
+							Position = UDim2.new(0, 8, 0, 0),
+							Size = UDim2.new(1, -28, 1, 0),
+							Font = Theme.FontBody,
+							Text = optionName,
+							TextColor3 = Theme.SubText,
+							TextSize = 11,
+							TextXAlignment = Enum.TextXAlignment.Left,
+							TextTruncate = Enum.TextTruncate.AtEnd,
+							ZIndex = 5,
+						}, OptionFrame)
+
+						local Check = New("Frame", {
+							AnchorPoint = Vector2.new(1, 0.5),
+							Position = UDim2.new(1, -8, 0.5, 0),
+							Size = UDim2.new(0, 6, 0, 6),
+							BackgroundColor3 = Theme.Accent,
+							BorderSizePixel = 0,
+							Visible = false,
+							ZIndex = 5,
+						}, OptionFrame)
+						Corner(Check, 3)
+
+						OptionFrame.MouseButton1Click:Connect(function()
+							if multi then
+								selected[optionName] = not selected[optionName] or nil
+							else
+								selected = { [optionName] = true }
+								SetOpen(false)
+							end
+							RefreshRowVisuals()
+							UpdateLabel()
+							FireCallback()
+						end)
+
+						rows[optionName] = { Frame = OptionFrame, Label = OptionLabel, Check = Check }
+					end
+
+					ListScroll.CanvasSize = UDim2.new(0, 0, 0, ListLayout.AbsoluteContentSize.Y + 8)
+					RefreshRowVisuals()
+					UpdateLabel()
+				end
+
+				Control.MouseButton1Click:Connect(function() SetOpen(not isOpen) end)
+
+				do
+					local defaults = {}
+					if type(default) == "table" then
+						for _, item in ipairs(default) do defaults[tostring(item)] = true end
+					elseif default ~= nil and default ~= "" then
+						defaults[tostring(default)] = true
+					end
+					selected = defaults
+				end
+
+				BuildRows()
+				Register(Row, dTitle .. " " .. dDesc)
+
+				function funcs:Set(newValue, skipCallback)
+					local mapped = {}
+					if type(newValue) == "table" then
+						for _, item in ipairs(newValue) do mapped[tostring(item)] = true end
+					elseif newValue ~= nil and newValue ~= "" then
+						mapped[tostring(newValue)] = true
+					end
+					selected = mapped
+					RefreshRowVisuals()
+					UpdateLabel()
+					if not skipCallback then FireCallback() else
+						local list = SelectedList()
+						funcs.Value = multi and list or (list[1] or "")
+					end
+				end
+
+				function funcs:Get()
+					local list = SelectedList()
+					return multi and list or (list[1] or "")
+				end
+
+				function funcs:GetOptions() return options end
+
+				function funcs:Refresh(newOptions, keepSelection)
+					options = newOptions or {}
+					funcs.Options = options
+					if not keepSelection then selected = {} end
+					BuildRows()
+					if isOpen then SetOpen(true) end
+				end
+				funcs.SetOptions = funcs.Refresh
+				funcs.SetValues = funcs.Refresh
+
+				function funcs:AddOption(optionName)
+					table.insert(options, tostring(optionName))
+					BuildRows()
+					if isOpen then SetOpen(true) end
+				end
+
+				function funcs:Clear()
+					selected = {}
+					RefreshRowVisuals()
+					UpdateLabel()
+				end
+
+				function funcs:Open() SetOpen(true) end
+				function funcs:Close() SetOpen(false) end
+
+				Bind(flag, funcs)
+				SaveState(dTitle, itemCfg, funcs)
+				return funcs
+			end
+
+			function Elements:AddKeybind(itemCfg)
+				itemCfg = itemCfg or {}
+				local kTitle   = tostring(itemCfg.Title or itemCfg[1] or "Keybind")
+				local kDesc    = tostring(itemCfg.Description or itemCfg.Content or "")
+				local default  = itemCfg.Default
+				local callback = itemCfg.Callback or function() end
+				local flag     = itemCfg.Flag
+
+				local Row, TitleLabel, _, Recalculate = BuildRow("Keybind", kTitle, kDesc, 88, 0)
+				Hoverable(Row)
+
+				local Bind = New("TextButton", {
+					AnchorPoint = Vector2.new(1, 0),
+					Position = UDim2.new(1, -10, 0, ROW_PAD - 3),
+					Size = UDim2.new(0, 72, 0, 22),
+					BackgroundColor3 = Theme.Card,
+					BorderSizePixel = 0,
+					Font = Theme.FontBody,
+					Text = "None",
+					TextColor3 = Theme.SubText,
+					TextSize = 11,
+					AutoButtonColor = false,
+					ZIndex = 3,
+				}, Row)
+				Corner(Bind, 5)
+				Stroke(Bind, Theme.Stroke, 1)
+
+				local currentKey = nil
+				local listening = false
+				local funcs = {}
+
+				local function SetKey(keyCode, skipCallback)
+					if typeof(keyCode) == "string" then
+						local ok, enum = pcall(function() return Enum.KeyCode[keyCode] end)
+						keyCode = ok and enum or nil
+					end
+					currentKey = keyCode
+					funcs.Value = currentKey
+					Bind.Text = currentKey and currentKey.Name or "None"
+					Bind.TextColor3 = currentKey and Theme.Text or Theme.SubText
+					if not skipCallback and currentKey then
+						pcall(callback, currentKey)
+					end
+				end
+
+				Bind.MouseButton1Click:Connect(function()
+					listening = true
+					Bind.Text = "..."
+					Bind.TextColor3 = Theme.Accent
+				end)
+
+				UserInputService.InputBegan:Connect(function(input, processed)
+					if listening then
+						if input.UserInputType == Enum.UserInputType.Keyboard then
+							listening = false
+							if input.KeyCode == Enum.KeyCode.Backspace then
+								SetKey(nil, true)
+							else
+								SetKey(input.KeyCode, true)
+							end
+						end
+						return
+					end
+
+					if processed or not currentKey then return end
+					if input.KeyCode == currentKey then
+						task.spawn(function() pcall(callback, currentKey) end)
+					end
+				end)
+
+				SetKey(default, true)
+				Register(Row, kTitle .. " " .. kDesc)
+
+				function funcs:Set(keyCode) SetKey(keyCode, true) end
+				function funcs:Get() return currentKey end
+				if flag then Sena.Flags[flag] = funcs end
+				SaveState(kTitle, itemCfg, funcs,
+					function() return currentKey and currentKey.Name or "" end,
+					function(name) SetKey(name ~= "" and name or nil, true) end)
+
+				return funcs
+			end
+
+			function Elements:AddLabel(itemCfg)
+				itemCfg = itemCfg or {}
+				local text = tostring(itemCfg.Title or itemCfg.Text or itemCfg[1] or "")
+
+				itemOrder = itemOrder + 1
+
+				local Row = New("Frame", {
+					Name = "Label",
+					LayoutOrder = itemOrder,
+					BackgroundColor3 = Theme.Element,
+					BackgroundTransparency = 0.4,
+					BorderSizePixel = 0,
+					Size = UDim2.new(1, 0, 0, 28),
+				}, BodyList)
+				Corner(Row, 6)
+
+				local Label = New("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.new(0, 10, 0, 0),
+					Size = UDim2.new(1, -20, 1, 0),
+					Font = Theme.FontBody,
+					Text = text,
+					TextColor3 = Theme.SubText,
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+				}, Row)
+
+				Register(Row, text)
+
+				local funcs = {}
+				function funcs:Set(newText)
+					text = tostring(newText or "")
+					Label.Text = text
+				end
+				function funcs:Get() return text end
+				return funcs
+			end
+
+			function Elements:AddConfigPanel(itemCfg)
+				itemCfg = itemCfg or {}
+
+				local NameInput, ConfigList, AutoLoadToggle
+				local suppressAutoLoad = false
+
+				local function CurrentName()
+					local typed = NameInput and tostring(NameInput:Get() or "") or ""
+					typed = typed:gsub("^%s+", ""):gsub("%s+$", "")
+					if typed ~= "" then return typed end
+					return tostring(ConfigList and ConfigList:Get() or "")
+				end
+
+				local function RefreshList(selectName)
+					if not ConfigList then return end
+					local saved = ConfigSystem:GetConfigs()
+					ConfigList:Refresh(saved, true)
+					if selectName and selectName ~= "" then
+						ConfigList:Set(selectName, true)
+					end
+				end
+
+				NameInput = Elements:AddInput({
+					Title       = "Config Name",
+					Placeholder = "my-config",
+					Default     = ConfigSystem.Current,
+					Width       = 110,
+					NoConfig    = true,
+					Callback    = function() end,
+				})
+
+				ConfigList = Elements:AddDropdown({
+					Title      = "Saved Configs",
+					Options    = ConfigSystem:GetConfigs(),
+					Default    = ConfigSystem.Current,
+					MaxVisible = 4,
+					NoConfig   = true,
+					Callback   = function(value)
+						if value ~= "" and NameInput then
+							NameInput:Set(value, true)
+						end
+						if AutoLoadToggle then
+							suppressAutoLoad = true
+							AutoLoadToggle:Set(ConfigSystem:GetAutoLoad() == value, true)
+							suppressAutoLoad = false
+						end
+					end,
+				})
+
+				local function ActionRow()
+					itemOrder = itemOrder + 1
+
+					local row = New("Frame", {
+						Name = "ConfigActions",
+						LayoutOrder = itemOrder,
+						BackgroundTransparency = 1,
+						Size = UDim2.new(1, 0, 0, 28),
+					}, BodyList)
+
+					New("UIListLayout", {
+						FillDirection = Enum.FillDirection.Horizontal,
+						Padding = UDim.new(0, 6),
+						SortOrder = Enum.SortOrder.LayoutOrder,
+					}, row)
+
+					return row
+				end
+
+				local function Action(parentRow, order, iconName, text, onClick)
+					local button = New("TextButton", {
+						Name = text,
+						LayoutOrder = order,
+						Size = UDim2.new(0.5, -3, 1, 0),
+						BackgroundColor3 = Theme.Element,
+						BorderSizePixel = 0,
+						Text = "",
+						AutoButtonColor = false,
+						ClipsDescendants = true,
+					}, parentRow)
+					Corner(button, 6)
+					Stroke(button, Theme.StrokeSoft, 1)
+
+					local holder = New("Frame", {
+						BackgroundTransparency = 1,
+						AnchorPoint = Vector2.new(0.5, 0.5),
+						Position = UDim2.new(0.5, 0, 0.5, 0),
+						Size = UDim2.new(1, -8, 1, 0),
+					}, button)
+
+					New("UIListLayout", {
+						FillDirection = Enum.FillDirection.Horizontal,
+						HorizontalAlignment = Enum.HorizontalAlignment.Center,
+						VerticalAlignment = Enum.VerticalAlignment.Center,
+						Padding = UDim.new(0, 4),
+						SortOrder = Enum.SortOrder.LayoutOrder,
+					}, holder)
+
+					local icon = New("ImageLabel", {
+						LayoutOrder = 1,
+						BackgroundTransparency = 1,
+						Size = UDim2.new(0, 12, 0, 12),
+						ImageColor3 = Theme.SubText,
+					}, holder)
+					ApplyIcon(icon, iconName, 48)
+
+					local label = New("TextLabel", {
+						LayoutOrder = 2,
+						BackgroundTransparency = 1,
+						AutomaticSize = Enum.AutomaticSize.X,
+						Size = UDim2.new(0, 0, 1, 0),
+						Font = Theme.Font,
+						Text = text,
+						TextColor3 = Theme.SubText,
+						TextSize = 11,
+					}, holder)
+
+					button.MouseEnter:Connect(function()
+						Tween(button, QUICK, { BackgroundColor3 = Theme.ElementHover })
+						Tween(icon, QUICK, { ImageColor3 = Theme.Text })
+						Tween(label, QUICK, { TextColor3 = Theme.Text })
+					end)
+					button.MouseLeave:Connect(function()
+						Tween(button, QUICK, { BackgroundColor3 = Theme.Element })
+						Tween(icon, QUICK, { ImageColor3 = Theme.SubText })
+						Tween(label, QUICK, { TextColor3 = Theme.SubText })
+					end)
+					button.MouseButton1Click:Connect(function()
+						task.spawn(function()
+							local ok, err = pcall(onClick)
+							if not ok then warn("[Sena] Config action error:", err) end
+						end)
+					end)
+
+					return button
+				end
+
+				local RowOne = ActionRow()
+
+				Action(RowOne, 1, "save", "Save", function()
+					local name = CurrentName()
+					if name == "" then
+						Sena:Notify({ Title = "Config", Content = "Isi nama config dulu.", Icon = "triangle-alert" })
+						return
+					end
+
+					local ok, err
+					if itemCfg.OnSave then
+						ok, err = itemCfg.OnSave(name)
+					else
+						ok, err = ConfigSystem:Save(name)
+					end
+					if ok then
+						RefreshList(name)
+						Sena:Notify({ Title = "Config saved", Content = name, Icon = "save" })
+					else
+						Sena:Notify({ Title = "Save failed", Content = tostring(err or "Unknown error."), Icon = "triangle-alert" })
+					end
+				end)
+
+				Action(RowOne, 2, "folder-open", "Load", function()
+					local name = CurrentName()
+					if name == "" then
+						Sena:Notify({ Title = "Config", Content = "Pilih config dulu.", Icon = "triangle-alert" })
+						return
+					end
+
+					local ok, err
+					if itemCfg.OnLoad then
+						ok, err = itemCfg.OnLoad(name)
+					else
+						ok, err = ConfigSystem:Load(name)
+					end
+					if ok then
+						Sena:Notify({ Title = "Config loaded", Content = name, Icon = "folder-open" })
+					else
+						Sena:Notify({ Title = "Load failed", Content = tostring(err or "Config not found."), Icon = "triangle-alert" })
+					end
+				end)
+
+				local RowTwo = ActionRow()
+
+				Action(RowTwo, 1, "trash-2", "Delete", function()
+					local name = CurrentName()
+					if name == "" then return end
+
+					local ok
+					if itemCfg.OnDelete then
+						ok = itemCfg.OnDelete(name)
+					else
+						ok = ConfigSystem:Delete(name)
+					end
+					if ok then
+						if NameInput then NameInput:Set("", true) end
+						RefreshList("")
+						if ConfigList then ConfigList:Clear() end
+						Sena:Notify({ Title = "Config deleted", Content = name, Icon = "trash-2" })
+					else
+						Sena:Notify({ Title = "Delete failed", Content = name, Icon = "triangle-alert" })
+					end
+				end)
+
+				Action(RowTwo, 2, "rotate-cw", "Refresh", function()
+					RefreshList(CurrentName())
+					Sena:Notify({ Title = "Config", Content = "List di-refresh.", Icon = "rotate-cw", Duration = 2 })
+				end)
+
+				local PasteInput
+				local RowThree = ActionRow()
+
+				Action(RowThree, 1, "clipboard-copy", "Export", function()
+					local encoded = ConfigSystem:Export()
+					if not encoded then
+						Sena:Notify({ Title = "Export failed", Content = "Gagal encode config.", Icon = "triangle-alert" })
+						return
+					end
+
+					if CopyToClipboard(encoded) then
+						Sena:Notify({
+							Title = "Config exported",
+							Content = "JSON udah di-copy ke clipboard.",
+							Icon = "clipboard-check",
+						})
+						return
+					end
+
+					if ConfigSystem.HasFiles then
+						local path = ConfigSystem.Folder .. "/export.json"
+						if pcall(function() writefile(path, encoded) end) then
+							Sena:Notify({
+								Title = "Config exported",
+								Content = "Executor nggak support clipboard, disimpan ke " .. path,
+								Icon = "save",
+								Duration = 7,
+							})
+							return
+						end
+					end
+
+					Sena:Notify({
+						Title = "Export failed",
+						Content = "Executor ini nggak support clipboard maupun writefile.",
+						Icon = "triangle-alert",
+						Duration = 7,
+					})
+				end)
+
+				Action(RowThree, 2, "clipboard-paste", "Import", function()
+					local raw = ReadClipboard()
+
+					if not raw and PasteInput then
+						local typed = tostring(PasteInput:Get() or "")
+						if typed ~= "" then raw = typed end
+					end
+
+					if not raw and ConfigSystem.HasFiles then
+						pcall(function()
+							local path = ConfigSystem.Folder .. "/export.json"
+							if isfile(path) then raw = readfile(path) end
+						end)
+					end
+
+					if not raw then
+						Sena:Notify({
+							Title = "Import failed",
+							Content = "Nggak ada data. Paste JSON-nya ke field Import Data.",
+							Icon = "triangle-alert",
+							Duration = 7,
+						})
+						return
+					end
+
+					if ConfigSystem:Import(raw) then
+						Sena:Notify({ Title = "Config imported", Content = "Semua nilai udah diterapkan.", Icon = "clipboard-check" })
+						if PasteInput then PasteInput:Set("", true) end
+					else
+						Sena:Notify({ Title = "Import failed", Content = "JSON-nya nggak valid.", Icon = "triangle-alert" })
+					end
+				end)
+
+				if not CanReadClipboard() then
+					PasteInput = Elements:AddInput({
+						Title       = "Import Data",
+						Description = "Executor ini nggak bisa baca clipboard — paste JSON config di sini.",
+						Placeholder = "{\"...\":...}",
+						Width       = 110,
+						NoConfig    = true,
+						Callback    = function() end,
+					})
+				end
+
+				AutoLoadToggle = Elements:AddToggle({
+					Title       = "Auto Load",
+					Description = "Muat config ini otomatis tiap script dijalankan.",
+					Default     = ConfigSystem:GetAutoLoad() ~= "",
+					NoConfig    = true,
+					Callback    = function(state)
+						if suppressAutoLoad then return end
+						local name = CurrentName()
+						if state and name == "" then
+							Sena:Notify({ Title = "Auto Load", Content = "Pilih config dulu.", Icon = "triangle-alert" })
+							return
+						end
+						ConfigSystem:SetAutoLoad(name, state)
+					end,
+				})
+
+				if not ConfigSystem.HasFiles then
+					Elements:AddLabel({
+						Title = "Executor tanpa file API — config cuma bertahan selama sesi ini.",
+					})
+				end
+
+				if itemCfg.AutoLoad ~= false and not ConfigSystem.AutoLoaded then
+					ConfigSystem.AutoLoaded = true
+					local pick = ConfigSystem:GetAutoLoad()
+					if pick ~= "" then
+						task.defer(function()
+							task.wait(0.35)
+							if ConfigSystem:Load(pick) then
+								if NameInput then NameInput:Set(pick, true) end
+								RefreshList(pick)
+								Sena:Notify({ Title = "Auto loaded", Content = pick, Icon = "folder-open" })
+							end
+						end)
+					end
+				end
+
+				local panel = {}
+				function panel:GetName() return CurrentName() end
+				function panel:SetName(name)
+					if NameInput then NameInput:Set(tostring(name or ""), true) end
+				end
+				function panel:Refresh(selectName) RefreshList(selectName) end
+				function panel:GetList() return ConfigSystem:GetConfigs() end
+				function panel:Save(name) return ConfigSystem:Save(name or CurrentName()) end
+				function panel:Load(name) return ConfigSystem:Load(name or CurrentName()) end
+				function panel:Delete(name) return ConfigSystem:Delete(name or CurrentName()) end
+
+				return panel
+			end
+
+			Elements.AddConfig = Elements.AddConfigPanel
+
+			Section.Api = Elements
+			return Elements
+		end
+
+		TabApi.CreateSection = TabApi.AddSection
+		TabApi.Title = tabTitle
+		TabApi.Key = key
+
+		function TabApi:Select() SelectTab(key) end
+
+		if not Window.CurrentTab then
+			SelectTab(key)
+		end
+
+		return TabApi
+	end
+
+	Window.AddTab = Window.CreateTab
+
+	Sena.Windows[#Sena.Windows + 1] = Window
+	SetOpen(true)
+
+	return Window
+end
+
+return Sena
