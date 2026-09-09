@@ -86,6 +86,7 @@ end
 
 local function WatchLogo(image, fallback)
 	task.spawn(function()
+		Elevate()
 		for _ = 1, 24 do
 			if image.IsLoaded then return end
 			task.wait(0.25)
@@ -107,6 +108,24 @@ local function Padding(parent, l, r, t, b)
 		PaddingTop = UDim.new(0, t or 0),
 		PaddingBottom = UDim.new(0, b or 0),
 	}, parent)
+end
+
+local SetIdentity = nil
+do
+	local ok = pcall(function() return setthreadidentity end)
+	if ok and type(setthreadidentity) == "function" then
+		SetIdentity = setthreadidentity
+	elseif syn and type(syn.set_thread_identity) == "function" then
+		SetIdentity = syn.set_thread_identity
+	end
+end
+
+-- Signal handlers and task.defer callbacks resume on threads that inherit the
+-- caller's identity. When a hub builds its UI from an unelevated thread those
+-- callbacks lose the capability to touch Instances at all, so reading
+-- AbsoluteSize raises "cannot access 'Instance'". Re-assert before touching GUI.
+local function Elevate()
+	if SetIdentity then pcall(SetIdentity, 8) end
 end
 
 local QUICK = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
@@ -357,6 +376,7 @@ local function MakeDraggable(handle, target, track)
 	local dragging, dragStart, startPos = false, nil, nil
 
 	handle.InputBegan:Connect(function(input)
+		Elevate()
 		if input.UserInputType == Enum.UserInputType.MouseButton1
 			or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = true
@@ -364,6 +384,7 @@ local function MakeDraggable(handle, target, track)
 			startPos = target.Position
 
 			input.Changed:Connect(function()
+				Elevate()
 				if input.UserInputState == Enum.UserInputState.End then
 					dragging = false
 				end
@@ -372,6 +393,7 @@ local function MakeDraggable(handle, target, track)
 	end)
 
 	local moved = UserInputService.InputChanged:Connect(function(input)
+		Elevate()
 		if not dragging then return end
 		if input.UserInputType ~= Enum.UserInputType.MouseMovement
 			and input.UserInputType ~= Enum.UserInputType.Touch then
@@ -534,6 +556,7 @@ function Sena:Notify(config)
 
 	local closed = false
 	local function close()
+		Elevate()
 		if closed then return end
 		closed = true
 		Tween(card, QUICK, { Position = UDim2.new(1, 20, 0, 0), BackgroundTransparency = 1 })
@@ -541,7 +564,7 @@ function Sena:Notify(config)
 		Tween(titleLabel, QUICK, { TextTransparency = 1 })
 		if descLabel then Tween(descLabel, QUICK, { TextTransparency = 1 }) end
 		if iconImage then Tween(iconImage, QUICK, { ImageTransparency = 1 }) end
-		task.delay(0.2, function() pcall(function() slot:Destroy() end) end)
+		task.delay(0.2, function() Elevate() pcall(function() slot:Destroy() end) end)
 	end
 
 	task.delay(duration, close)
@@ -776,6 +799,7 @@ function Sena:CreateWindow(config)
 		end
 
 		button.MouseEnter:Connect(function()
+			Elevate()
 			Tween(button, QUICK, { BackgroundTransparency = 0 })
 			Tween(image, QUICK, { ImageColor3 = Theme.Text })
 			if not image.Visible then
@@ -783,6 +807,7 @@ function Sena:CreateWindow(config)
 			end
 		end)
 		button.MouseLeave:Connect(function()
+			Elevate()
 			Tween(button, QUICK, { BackgroundTransparency = 1 })
 			Tween(image, QUICK, { ImageColor3 = Theme.SubText })
 			if not image.Visible then
@@ -915,16 +940,19 @@ function Sena:CreateWindow(config)
 	DiscordPill.Position = UDim2.new(0, 11, 0.5, 1)
 
 	DiscordPill.MouseEnter:Connect(function()
+		Elevate()
 		Tween(DiscordPill, QUICK, { BackgroundTransparency = 0 })
 		Tween(DiscordIcon, QUICK, { ImageColor3 = Theme.Text })
 		Tween(DiscordLabel, QUICK, { TextColor3 = Theme.Text })
 	end)
 	DiscordPill.MouseLeave:Connect(function()
+		Elevate()
 		Tween(DiscordPill, QUICK, { BackgroundTransparency = 0.15 })
 		Tween(DiscordIcon, QUICK, { ImageColor3 = Theme.SubText })
 		Tween(DiscordLabel, QUICK, { TextColor3 = Theme.SubText })
 	end)
 	DiscordPill.MouseButton1Click:Connect(function()
+		Elevate()
 		if CopyToClipboard(discord) then
 			Sena:Notify({ Title = "Copied", Content = discord, Icon = "clipboard-check", Duration = 3 })
 		else
@@ -968,9 +996,11 @@ function Sena:CreateWindow(config)
 	end
 
 	task.spawn(function()
+		Elevate()
 		local frames, elapsed = 0, 0
 		local connection
 		connection = RunService.RenderStepped:Connect(function(delta)
+			Elevate()
 			if not FpsLabel.Parent then
 				connection:Disconnect()
 				return
@@ -1042,6 +1072,7 @@ function Sena:CreateWindow(config)
 		ApplyIcon(floatIcon, logo, 256)
 
 		task.spawn(function()
+			Elevate()
 			for _ = 1, 24 do
 				if floatIcon.IsLoaded then return end
 				task.wait(0.25)
@@ -1056,6 +1087,7 @@ function Sena:CreateWindow(config)
 	MakeDraggable(FloatButton, FloatButton, Track)
 
 	local function SetOpen(state)
+		Elevate()
 		IsOpen = state
 
 		if state then
@@ -1066,6 +1098,7 @@ function Sena:CreateWindow(config)
 		else
 			Tween(Scale, QUICK, { Scale = 0.94 })
 			task.delay(0.16, function()
+				Elevate()
 				if not IsOpen then
 					Main.Visible = false
 					FloatButton.Visible = true
@@ -1078,10 +1111,12 @@ function Sena:CreateWindow(config)
 	FloatButton.MouseButton1Click:Connect(function() SetOpen(true) end)
 
 	CloseButton.MouseButton1Click:Connect(function()
+		Elevate()
 		Window:Destroy()
 	end)
 
 	Track(UserInputService.InputBegan:Connect(function(input, processed)
+		Elevate()
 		if processed then return end
 		if input.KeyCode == toggleKey then
 			SetOpen(not IsOpen)
@@ -1102,6 +1137,7 @@ function Sena:CreateWindow(config)
 		table.clear(Connections)
 		Tween(Scale, QUICK, { Scale = 0.9 })
 		task.delay(0.18, function()
+			Elevate()
 			pcall(function() ScreenGui:Destroy() end)
 			if NotifyGui then pcall(function() NotifyGui:Destroy() end) end
 		end)
@@ -1171,6 +1207,7 @@ function Sena:CreateWindow(config)
 
 			if self.Pending ~= nil and self.Pending[key] ~= nil then
 				task.spawn(function()
+					Elevate()
 					pcall(funcs.Set, self.Pending[key])
 				end)
 			end
@@ -1197,6 +1234,7 @@ function Sena:CreateWindow(config)
 				local value = data[key]
 				if funcs and value ~= nil then
 					task.spawn(function()
+						Elevate()
 						pcall(funcs.Set, value)
 					end)
 				end
@@ -1380,6 +1418,7 @@ function Sena:CreateWindow(config)
 	end
 
 	local function RunSearch()
+		Elevate()
 		local query = Normalize(SearchBox.Text)
 		local sectionsSeen = {}
 
@@ -1407,6 +1446,7 @@ function Sena:CreateWindow(config)
 	local TabButtons = {}
 
 	local function SelectTab(key)
+		Elevate()
 		for tabKey, tab in pairs(Window.Tabs) do
 			local active = tabKey == key
 			tab.Page.Visible = active
@@ -1503,12 +1543,14 @@ function Sena:CreateWindow(config)
 		}, ButtonFrame)
 
 		ButtonFrame.MouseEnter:Connect(function()
+			Elevate()
 			if Window.CurrentTab ~= key then
 				Tween(ButtonFrame, QUICK, { BackgroundTransparency = 0.5 })
 				Tween(ButtonLabel, QUICK, { TextColor3 = Theme.Text })
 			end
 		end)
 		ButtonFrame.MouseLeave:Connect(function()
+			Elevate()
 			if Window.CurrentTab ~= key then
 				Tween(ButtonFrame, QUICK, { BackgroundTransparency = 1 })
 				Tween(ButtonLabel, QUICK, { TextColor3 = Theme.SubText })
@@ -1572,6 +1614,7 @@ function Sena:CreateWindow(config)
 		end
 
 		local function Relayout()
+			Elevate()
 			local leftH = LeftLayout.AbsoluteContentSize.Y
 			local rightH = singleColumn and 0 or RightLayout.AbsoluteContentSize.Y
 
@@ -1704,6 +1747,7 @@ function Sena:CreateWindow(config)
 			local itemOrder = 0
 
 			local function Resize(instant)
+				Elevate()
 				local contentH = BodyLayout.AbsoluteContentSize.Y
 				local bodyH = contentH > 0 and (contentH + 12) or 0
 				BodyList.Size = UDim2.new(1, 0, 0, contentH)
@@ -1720,16 +1764,19 @@ function Sena:CreateWindow(config)
 			Section.Resize = Resize
 
 			function Section:SetOpen(state, instant)
+				Elevate()
 				Section.Open = state and true or false
 				Tween(Chevron, QUICK, { Rotation = Section.Open and 0 or -90 })
 				Resize(instant)
 			end
 
 			BodyLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+				Elevate()
 				Resize(true)
 			end)
 
 			Header.MouseButton1Click:Connect(function()
+				Elevate()
 				Section:SetOpen(not Section.Open)
 			end)
 
@@ -1785,6 +1832,7 @@ function Sena:CreateWindow(config)
 				end
 
 				local function Recalculate()
+					Elevate()
 					local width = Row.AbsoluteSize.X - 10 - reservedRight
 					local lines = DescLabel and CountLines(rowDesc, width, Theme.FontBody, 11, 3) or 0
 
@@ -1806,9 +1854,11 @@ function Sena:CreateWindow(config)
 
 			local function Hoverable(row)
 				row.MouseEnter:Connect(function()
+					Elevate()
 					Tween(row, QUICK, { BackgroundColor3 = Theme.ElementHover })
 				end)
 				row.MouseLeave:Connect(function()
+					Elevate()
 					Tween(row, QUICK, { BackgroundColor3 = Theme.Element })
 				end)
 			end
@@ -1900,6 +1950,7 @@ function Sena:CreateWindow(config)
 				}, Row)
 
 				local function Recalculate()
+					Elevate()
 					local width = Row.AbsoluteSize.X - 22
 					local lines = pContent ~= "" and CountLines(pContent, width, Theme.FontBody, 11, 12) or 0
 					ContentLabel.Size = UDim2.new(1, -22, 0, lines * DESC_LINE)
@@ -2013,11 +2064,14 @@ function Sena:CreateWindow(config)
 
 				local Click = ClickCatcher(Row)
 				Click.MouseButton1Click:Connect(function()
+					Elevate()
 					Tween(Arrow, QUICK, { Position = UDim2.new(1, -6, 0, ROW_PAD + 1) })
 					task.delay(0.12, function()
+						Elevate()
 						Tween(Arrow, QUICK, { Position = UDim2.new(1, -10, 0, ROW_PAD + 1) })
 					end)
 					task.spawn(function()
+						Elevate()
 						local ok, err = pcall(callback)
 						if not ok then warn("[Sena] Button callback error:", err) end
 					end)
@@ -2035,7 +2089,7 @@ function Sena:CreateWindow(config)
 					if newCfg.Callback then callback = newCfg.Callback end
 					Recalculate()
 				end
-				function funcs:Fire() task.spawn(callback) end
+				function funcs:Fire() task.spawn(function() Elevate() callback() end) end
 
 				return funcs
 			end
@@ -2083,11 +2137,13 @@ function Sena:CreateWindow(config)
 				end
 
 				local function SetValue(newValue, skipCallback)
+					Elevate()
 					value = newValue and true or false
 					funcs.Value = value
 					Render(true)
 					if not skipCallback then
 						task.spawn(function()
+							Elevate()
 							local ok, err = pcall(callback, value)
 							if not ok then warn("[Sena] Toggle callback error:", err) end
 						end)
@@ -2139,20 +2195,20 @@ function Sena:CreateWindow(config)
 					TextXAlignment = Enum.TextXAlignment.Right,
 				}, Row)
 
-				local Track = New("Frame", {
+				local Bar = New("Frame", {
 					AnchorPoint = Vector2.new(0, 1),
 					Position = UDim2.new(0, 10, 1, -10),
 					Size = UDim2.new(1, -20, 0, 4),
 					BackgroundColor3 = Theme.Track,
 					BorderSizePixel = 0,
 				}, Row)
-				Corner(Track, 2)
+				Corner(Bar, 2)
 
 				local Fill = New("Frame", {
 					Size = UDim2.new(0, 0, 1, 0),
 					BackgroundColor3 = Theme.Accent,
 					BorderSizePixel = 0,
-				}, Track)
+				}, Bar)
 				Corner(Fill, 2)
 
 				local Knob = New("Frame", {
@@ -2162,7 +2218,7 @@ function Sena:CreateWindow(config)
 					BackgroundColor3 = Theme.Accent,
 					BorderSizePixel = 0,
 					ZIndex = 4,
-				}, Track)
+				}, Bar)
 				Corner(Knob, 5)
 
 				local value = math.clamp(default, min, max)
@@ -2185,11 +2241,13 @@ function Sena:CreateWindow(config)
 				end
 
 				local function SetValue(newValue, skipCallback, animate)
+					Elevate()
 					value = Snap(tonumber(newValue) or min)
 					funcs.Value = value
 					Render(animate ~= false)
 					if not skipCallback then
 						task.spawn(function()
+							Elevate()
 							local ok, err = pcall(callback, value)
 							if not ok then warn("[Sena] Slider callback error:", err) end
 						end)
@@ -2210,13 +2268,14 @@ function Sena:CreateWindow(config)
 				local dragging = false
 
 				local function UpdateFromX(x)
-					local trackPos = Track.AbsolutePosition.X
-					local trackSize = math.max(1, Track.AbsoluteSize.X)
+					local trackPos = Bar.AbsolutePosition.X
+					local trackSize = math.max(1, Bar.AbsoluteSize.X)
 					local alpha = math.clamp((x - trackPos) / trackSize, 0, 1)
 					SetValue(min + alpha * (max - min), false, false)
 				end
 
 				Hit.InputBegan:Connect(function(input)
+					Elevate()
 					if input.UserInputType == Enum.UserInputType.MouseButton1
 						or input.UserInputType == Enum.UserInputType.Touch then
 						dragging = true
@@ -2226,6 +2285,7 @@ function Sena:CreateWindow(config)
 				end)
 
 				Track(UserInputService.InputChanged:Connect(function(input)
+					Elevate()
 					if not dragging then return end
 					if input.UserInputType == Enum.UserInputType.MouseMovement
 						or input.UserInputType == Enum.UserInputType.Touch then
@@ -2234,6 +2294,7 @@ function Sena:CreateWindow(config)
 				end))
 
 				Track(UserInputService.InputEnded:Connect(function(input)
+					Elevate()
 					if not dragging then return end
 					if input.UserInputType == Enum.UserInputType.MouseButton1
 						or input.UserInputType == Enum.UserInputType.Touch then
@@ -2292,6 +2353,7 @@ function Sena:CreateWindow(config)
 				local funcs = { Value = value }
 
 				local function Commit(text, skipCallback)
+					Elevate()
 					if numeric then
 						local n = tonumber(text)
 						text = n and tostring(n) or ""
@@ -2301,6 +2363,7 @@ function Sena:CreateWindow(config)
 					Box.Text = text
 					if not skipCallback then
 						task.spawn(function()
+							Elevate()
 							local ok, err = pcall(callback, numeric and (tonumber(value) or 0) or value)
 							if not ok then warn("[Sena] Input callback error:", err) end
 						end)
@@ -2308,9 +2371,11 @@ function Sena:CreateWindow(config)
 				end
 
 				Box.Focused:Connect(function()
+					Elevate()
 					Tween(Box, QUICK, { BackgroundColor3 = Theme.Backdrop })
 				end)
 				Box.FocusLost:Connect(function(enter)
+					Elevate()
 					Tween(Box, QUICK, { BackgroundColor3 = Theme.Card })
 					Commit(Box.Text, false)
 				end)
@@ -2432,6 +2497,7 @@ function Sena:CreateWindow(config)
 				local rows = {}
 
 				local function RefreshRowVisuals()
+					Elevate()
 					for optionName, entry in pairs(rows) do
 						local on = selected[optionName] == true
 						Tween(entry.Frame, QUICK, {
@@ -2448,6 +2514,7 @@ function Sena:CreateWindow(config)
 					local list = SelectedList()
 					funcs.Value = multi and list or (list[1] or "")
 					task.spawn(function()
+						Elevate()
 						local ok, err = pcall(callback, multi and list or (list[1] or ""))
 						if not ok then warn("[Sena] Dropdown callback error:", err) end
 					end)
@@ -2461,6 +2528,7 @@ function Sena:CreateWindow(config)
 				end
 
 				local function SetOpen(state)
+					Elevate()
 					isOpen = state and true or false
 					local height = isOpen and ListHeight() or 0
 					SetExtra(isOpen and (height + 8) or 0)
@@ -2471,6 +2539,7 @@ function Sena:CreateWindow(config)
 				end
 
 				local function BuildRows()
+					Elevate()
 					for _, child in ipairs(ListScroll:GetChildren()) do
 						if child:IsA("TextButton") or child:IsA("TextLabel") then
 							child:Destroy()
@@ -2530,6 +2599,7 @@ function Sena:CreateWindow(config)
 						Corner(Check, 3)
 
 						OptionFrame.MouseButton1Click:Connect(function()
+							Elevate()
 							if multi then
 								selected[optionName] = not selected[optionName] or nil
 							else
@@ -2649,6 +2719,7 @@ function Sena:CreateWindow(config)
 				local funcs = {}
 
 				local function SetKey(keyCode, skipCallback)
+					Elevate()
 					if typeof(keyCode) == "string" then
 						local ok, enum = pcall(function() return Enum.KeyCode[keyCode] end)
 						keyCode = ok and enum or nil
@@ -2663,12 +2734,14 @@ function Sena:CreateWindow(config)
 				end
 
 				Bind.MouseButton1Click:Connect(function()
+					Elevate()
 					listening = true
 					Bind.Text = "..."
 					Bind.TextColor3 = Theme.Accent
 				end)
 
 				Track(UserInputService.InputBegan:Connect(function(input, processed)
+					Elevate()
 					if listening then
 						if input.UserInputType == Enum.UserInputType.Keyboard then
 							listening = false
@@ -2683,7 +2756,7 @@ function Sena:CreateWindow(config)
 
 					if processed or not currentKey then return end
 					if input.KeyCode == currentKey then
-						task.spawn(function() pcall(callback, currentKey) end)
+						task.spawn(function() Elevate() pcall(callback, currentKey) end)
 					end
 				end))
 
@@ -2856,17 +2929,21 @@ function Sena:CreateWindow(config)
 					}, holder)
 
 					button.MouseEnter:Connect(function()
+						Elevate()
 						Tween(button, QUICK, { BackgroundColor3 = Theme.ElementHover })
 						Tween(icon, QUICK, { ImageColor3 = Theme.Text })
 						Tween(label, QUICK, { TextColor3 = Theme.Text })
 					end)
 					button.MouseLeave:Connect(function()
+						Elevate()
 						Tween(button, QUICK, { BackgroundColor3 = Theme.Element })
 						Tween(icon, QUICK, { ImageColor3 = Theme.SubText })
 						Tween(label, QUICK, { TextColor3 = Theme.SubText })
 					end)
 					button.MouseButton1Click:Connect(function()
+						Elevate()
 						task.spawn(function()
+							Elevate()
 							local ok, err = pcall(onClick)
 							if not ok then warn("[Sena] Config action error:", err) end
 						end)
@@ -3056,6 +3133,7 @@ function Sena:CreateWindow(config)
 					local pick = ConfigSystem:GetAutoLoad()
 					if pick ~= "" then
 						task.defer(function()
+							Elevate()
 							task.wait(0.35)
 							if ConfigSystem:Load(pick) then
 								if NameInput then NameInput:Set(pick, true) end
