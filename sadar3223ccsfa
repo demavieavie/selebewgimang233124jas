@@ -7,6 +7,25 @@ local HttpService        = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
 
+local SetIdentity = nil
+do
+	local ok = pcall(function() return setthreadidentity end)
+	if ok and type(setthreadidentity) == "function" then
+		SetIdentity = setthreadidentity
+	elseif syn and type(syn.set_thread_identity) == "function" then
+		SetIdentity = syn.set_thread_identity
+	end
+end
+
+-- Signal handlers and task.defer callbacks resume on threads that inherit the
+-- caller's identity. When a hub builds its UI from an unelevated thread those
+-- callbacks lose the capability to touch Instances at all, so reading
+-- AbsoluteSize raises "cannot access 'Instance'". Re-assert before touching GUI.
+local function Elevate()
+	if SetIdentity then pcall(SetIdentity, 8) end
+end
+
+
 local Theme = {
 	Accent        = Color3.fromRGB(232, 232, 238),
 	AccentText    = Color3.fromRGB(14, 14, 17),
@@ -108,24 +127,6 @@ local function Padding(parent, l, r, t, b)
 		PaddingTop = UDim.new(0, t or 0),
 		PaddingBottom = UDim.new(0, b or 0),
 	}, parent)
-end
-
-local SetIdentity = nil
-do
-	local ok = pcall(function() return setthreadidentity end)
-	if ok and type(setthreadidentity) == "function" then
-		SetIdentity = setthreadidentity
-	elseif syn and type(syn.set_thread_identity) == "function" then
-		SetIdentity = syn.set_thread_identity
-	end
-end
-
--- Signal handlers and task.defer callbacks resume on threads that inherit the
--- caller's identity. When a hub builds its UI from an unelevated thread those
--- callbacks lose the capability to touch Instances at all, so reading
--- AbsoluteSize raises "cannot access 'Instance'". Re-assert before touching GUI.
-local function Elevate()
-	if SetIdentity then pcall(SetIdentity, 8) end
 end
 
 local QUICK = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
@@ -592,6 +593,7 @@ function Sena:CreateWindow(config)
 
 	local Window = {}
 	local Connections = {}
+	Sena.Unloaded = false
 
 	local function Track(connection)
 		if connection then table.insert(Connections, connection) end
@@ -627,6 +629,38 @@ function Sena:CreateWindow(config)
 	Stroke(Main, Theme.Stroke, 1)
 
 	local Scale = New("UIScale", { Scale = 1 }, Main)
+
+	-- Fit the window to the screen. A 700x470 panel swallows a phone outright,
+	-- so scale it down (never up) until it leaves a margin on every side. The
+	-- open / close animations multiply by this base so the fit survives them.
+	local baseScale = 1
+	local userScale = tonumber(config.Scale) or 1
+	local autoFit   = config.AutoFit ~= false
+	local function FitScale()
+		Elevate()
+		local fit = 1
+		if autoFit then
+			local cam = workspace.CurrentCamera
+			local vp = cam and cam.ViewportSize or Vector2.new(1920, 1080)
+			local w = size.X.Scale * vp.X + size.X.Offset
+			local h = size.Y.Scale * vp.Y + size.Y.Offset
+			local touch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+			local room = touch and 0.86 or 0.94
+			if w > 0 and h > 0 and vp.X > 0 and vp.Y > 0 then
+				fit = math.min(1, (vp.X * room) / w, (vp.Y * room) / h)
+			end
+		end
+		baseScale = math.clamp(fit * userScale, 0.4, 1.5)
+		Scale.Scale = baseScale
+		return baseScale
+	end
+	FitScale()
+	do
+		local cam = workspace.CurrentCamera
+		if cam then
+			Track(cam:GetPropertyChangedSignal("ViewportSize"):Connect(FitScale))
+		end
+	end
 
 	local Sidebar = New("Frame", {
 		Name = "Sidebar",
@@ -1071,8 +1105,16 @@ function Sena:CreateWindow(config)
 		}, FloatButton)
 		ApplyIcon(floatIcon, logo, 256)
 
+		-- Roblox never decodes an image for a GuiObject it is not rendering, so
+		-- IsLoaded stays false for as long as the float button is hidden. Judging
+		-- the logo here would drop to the monogram on every window that simply
+		-- opened maximised. Wait until the button is actually on screen.
 		task.spawn(function()
 			Elevate()
+			while not FloatButton.Visible do
+				if Sena.Unloaded or not FloatButton.Parent then return end
+				task.wait(0.2)
+			end
 			for _ = 1, 24 do
 				if floatIcon.IsLoaded then return end
 				task.wait(0.25)
@@ -1093,10 +1135,10 @@ function Sena:CreateWindow(config)
 		if state then
 			Main.Visible = true
 			FloatButton.Visible = false
-			Scale.Scale = 0.94
-			Tween(Scale, SMOOTH, { Scale = 1 })
+			Scale.Scale = baseScale * 0.94
+			Tween(Scale, SMOOTH, { Scale = baseScale })
 		else
-			Tween(Scale, QUICK, { Scale = 0.94 })
+			Tween(Scale, QUICK, { Scale = baseScale * 0.94 })
 			task.delay(0.16, function()
 				Elevate()
 				if not IsOpen then
@@ -1128,6 +1170,14 @@ function Sena:CreateWindow(config)
 		SetOpen(state)
 	end
 
+	-- Manual size on top of the auto fit: 1 keeps the fitted size, 0.8 shrinks
+	-- it a further fifth. Hubs can hang this off a slider for phone users.
+	function Window:SetScale(scale)
+		userScale = tonumber(scale) or 1
+		return FitScale()
+	end
+	function Window:GetScale() return baseScale end
+
 	function Window:Destroy()
 		Sena.Unloaded = true
 
@@ -1135,7 +1185,7 @@ function Sena:CreateWindow(config)
 			pcall(function() connection:Disconnect() end)
 		end
 		table.clear(Connections)
-		Tween(Scale, QUICK, { Scale = 0.9 })
+		Tween(Scale, QUICK, { Scale = baseScale * 0.9 })
 		task.delay(0.18, function()
 			Elevate()
 			pcall(function() ScreenGui:Destroy() end)
