@@ -3076,6 +3076,7 @@ function Sena:CreateWindow(config)
 
 				local rows = {}
 				local rowsDirty = true  -- baris opsi dibangun lazy pas pertama dibuka
+				local BuildRows  -- forward-declare: dipanggil SetOpen yang didefinisiin duluan
 
 				local function RefreshRowVisuals()
 					Elevate()
@@ -3123,7 +3124,7 @@ function Sena:CreateWindow(config)
 					Section.Resize(true)
 				end
 
-				local function BuildRows()
+				BuildRows = function()
 					Elevate()
 					for _, child in ipairs(ListScroll:GetChildren()) do
 						if child:IsA("TextButton") or child:IsA("TextLabel") then
