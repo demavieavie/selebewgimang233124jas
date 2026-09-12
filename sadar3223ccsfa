@@ -572,6 +572,500 @@ function Sena:Notify(config)
 	return { Close = close }
 end
 
+-- ---------------------------------------------------------------------------
+-- Announcement popup (top-center) + backend link (live chat / announcements)
+-- ---------------------------------------------------------------------------
+
+local AnnounceGui, AnnounceHolder
+local ANNOUNCE_SOUND = "rbxasset://sounds/electronicpingshort.wav"
+local ANNOUNCE_WIDTH = 400
+
+local function EnsureAnnounceGui()
+	if AnnounceGui and AnnounceGui.Parent then return end
+
+	local parent = GuiParent()
+
+	pcall(function()
+		for _, child in ipairs(parent:GetChildren()) do
+			if child.Name == "SenaAnnounce" then
+				pcall(function() child:Destroy() end)
+			end
+		end
+	end)
+
+	AnnounceGui = New("ScreenGui", {
+		Name = "SenaAnnounce",
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		ResetOnSpawn = false,
+		DisplayOrder = 10000,
+	})
+	Protect(AnnounceGui)
+	AnnounceGui.Parent = parent
+
+	AnnounceHolder = New("Frame", {
+		Name = "Holder",
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 22),
+		Size = UDim2.new(0, ANNOUNCE_WIDTH, 1, -44),
+		BackgroundTransparency = 1,
+	}, AnnounceGui)
+
+	New("UIListLayout", {
+		Padding = UDim.new(0, 8),
+		HorizontalAlignment = Enum.HorizontalAlignment.Center,
+		VerticalAlignment = Enum.VerticalAlignment.Top,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, AnnounceHolder)
+end
+
+local function PlayAnnounceSound(id)
+	if not AnnounceGui then return end
+	pcall(function()
+		local sound = New("Sound", {
+			Name = "AnnounceSound",
+			SoundId = id or ANNOUNCE_SOUND,
+			Volume = 0.7,
+		}, AnnounceGui)
+		sound:Play()
+		task.delay(6, function() pcall(function() sound:Destroy() end) end)
+	end)
+end
+
+local function ResolveAnnounceSound(value)
+	if value == false then return nil end
+	local text = tostring(value == nil and "default" or value):lower()
+	if text == "off" or text == "none" or text == "false" or text == "0" then return nil end
+	if text == "default" or text == "true" or text == "" then return ANNOUNCE_SOUND end
+	return tostring(value)
+end
+
+function Sena:Announce(config)
+	config = config or {}
+	local title    = tostring(config.Title or config[1] or "Sena Announcements")
+	local content  = tostring(config.Content or config.Text or config.Description or config[2] or "")
+	local duration = tonumber(config.Duration or config.Time or config[3]) or 15
+	local iconName = config.Icon or "megaphone"
+	local soundId  = ResolveAnnounceSound(config.Sound)
+
+	EnsureAnnounceGui()
+
+	local PAD, BADGE, GAP = 14, 30, 10
+	local textLeft  = PAD + BADGE + GAP
+	local textWidth = ANNOUNCE_WIDTH - textLeft - PAD - 26
+	local lines = content ~= "" and CountLines(content, textWidth, Theme.FontBody, 12, 10) or 0
+	local bodyH = lines > 0 and lines * 15 or 0
+	local contentH = math.max(BADGE, 16 + (bodyH > 0 and (4 + bodyH) or 0))
+	local height = PAD + contentH + 12 + 3 + 10
+
+	local slot = New("Frame", {
+		Name = "Slot",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, height),
+		ClipsDescendants = false,
+	}, AnnounceHolder)
+
+	local card = New("Frame", {
+		Name = "Announcement",
+		BackgroundColor3 = Theme.Card,
+		BorderSizePixel = 0,
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, -height - 40),
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency = 1,
+	}, slot)
+	Corner(card, 10)
+
+	-- depth: gradient halus dari atas + glow tipis di luar stroke
+	New("UIGradient", {
+		Rotation = 90,
+		Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+			ColorSequenceKeypoint.new(1, Color3.fromRGB(225, 225, 232)),
+		}),
+	}, card)
+	local cardStroke = Stroke(card, Theme.Stroke, 1, 1)
+	local glow = New("Frame", {
+		Name = "Glow",
+		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.5, 0),
+		Size = UDim2.new(1, 0, 1, 0),
+		ZIndex = 0,
+	}, card)
+	Corner(glow, 10)
+	local glowStroke = Stroke(glow, Theme.Accent, 6, 1)
+
+	local scale = New("UIScale", { Scale = 0.96 }, card)
+
+	-- badge icon
+	local badge = New("Frame", {
+		Name = "Badge",
+		BackgroundColor3 = Theme.Accent,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, PAD, 0, PAD),
+		Size = UDim2.new(0, BADGE, 0, BADGE),
+		BackgroundTransparency = 1,
+	}, card)
+	Corner(badge, 8)
+
+	local badgeIcon = New("ImageLabel", {
+		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.5, 0),
+		Size = UDim2.new(0, 16, 0, 16),
+		ImageColor3 = Theme.AccentText,
+		ImageTransparency = 1,
+	}, badge)
+	ApplyIcon(badgeIcon, iconName, 48)
+	if badgeIcon.Image == "" then ApplyIcon(badgeIcon, "zap", 48) end
+
+	local badgeFallback = New("TextLabel", {
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 1, 0),
+		Font = Theme.FontBold,
+		Text = "!",
+		TextColor3 = Theme.AccentText,
+		TextSize = 15,
+		TextTransparency = 1,
+		Visible = badgeIcon.Image == "",
+	}, badge)
+
+	local titleLabel = New("TextLabel", {
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, textLeft, 0, PAD),
+		Size = UDim2.new(1, -textLeft - PAD - 26, 0, 16),
+		Font = Theme.FontBold,
+		Text = title,
+		TextColor3 = Theme.Text,
+		TextSize = 13,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		TextTransparency = 1,
+	}, card)
+
+	local descLabel
+	if content ~= "" then
+		descLabel = New("TextLabel", {
+			BackgroundTransparency = 1,
+			Position = UDim2.new(0, textLeft, 0, PAD + 16 + 4),
+			Size = UDim2.new(1, -textLeft - PAD, 0, bodyH),
+			Font = Theme.FontBody,
+			Text = content,
+			TextColor3 = Theme.Text,
+			TextSize = 12,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Top,
+			TextWrapped = true,
+			TextTransparency = 0.25,
+		}, card)
+		descLabel.TextTransparency = 1
+	end
+
+	-- close: icon lucide "x", fallback karakter
+	local closeButton = New("TextButton", {
+		Name = "Close",
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -10, 0, 10),
+		Size = UDim2.new(0, 24, 0, 24),
+		BackgroundColor3 = Theme.Element,
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Text = "",
+		AutoButtonColor = false,
+		ZIndex = 3,
+	}, card)
+	Corner(closeButton, 6)
+
+	local closeIcon = New("ImageLabel", {
+		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.5, 0),
+		Size = UDim2.new(0, 12, 0, 12),
+		ImageColor3 = Theme.SubText,
+		ImageTransparency = 1,
+		ZIndex = 4,
+	}, closeButton)
+	ApplyIcon(closeIcon, "x", 48)
+
+	local closeText
+	if closeIcon.Image == "" then
+		closeText = New("TextLabel", {
+			BackgroundTransparency = 1,
+			Size = UDim2.new(1, 0, 1, 0),
+			Font = Theme.FontBold,
+			Text = "×",
+			TextColor3 = Theme.SubText,
+			TextSize = 16,
+			TextTransparency = 1,
+			ZIndex = 4,
+		}, closeButton)
+	end
+
+	-- progress bar: track dim + isi accent, inset
+	local track = New("Frame", {
+		Name = "Track",
+		BackgroundColor3 = Theme.Track,
+		BorderSizePixel = 0,
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, PAD, 1, -10),
+		Size = UDim2.new(1, -PAD * 2, 0, 3),
+		BackgroundTransparency = 1,
+	}, card)
+	Corner(track, 2)
+
+	local bar = New("Frame", {
+		Name = "Bar",
+		BackgroundColor3 = Theme.Accent,
+		BorderSizePixel = 0,
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency = 1,
+	}, track)
+	Corner(bar, 2)
+
+	-- masuk: turun + scale-in dengan overshoot dikit
+	local ENTER = TweenInfo.new(0.42, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+	local FADE  = TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+	Tween(card, ENTER, { Position = UDim2.new(0.5, 0, 0, 0) })
+	Tween(scale, ENTER, { Scale = 1 })
+	Tween(card, FADE, { BackgroundTransparency = 0 })
+	Tween(cardStroke, FADE, { Transparency = 0 })
+	Tween(glowStroke, FADE, { Transparency = 0.9 })
+	Tween(badge, FADE, { BackgroundTransparency = 0 })
+	Tween(badgeIcon, FADE, { ImageTransparency = 0 })
+	Tween(badgeFallback, FADE, { TextTransparency = 0 })
+	Tween(titleLabel, FADE, { TextTransparency = 0 })
+	Tween(closeIcon, FADE, { ImageTransparency = 0 })
+	if closeText then Tween(closeText, FADE, { TextTransparency = 0 }) end
+	if descLabel then Tween(descLabel, FADE, { TextTransparency = 0.2 }) end
+	Tween(track, FADE, { BackgroundTransparency = 0.4 })
+	Tween(bar, FADE, { BackgroundTransparency = 0 })
+	Tween(bar, TweenInfo.new(duration, Enum.EasingStyle.Linear), { Size = UDim2.new(0, 0, 1, 0) })
+
+	-- glow kedip sekali pas muncul biar mata ketarik
+	task.delay(0.15, function()
+		Elevate()
+		Tween(glowStroke, TweenInfo.new(0.25), { Transparency = 0.55 })
+		task.delay(0.3, function()
+			Elevate()
+			Tween(glowStroke, TweenInfo.new(0.6), { Transparency = 0.9 })
+		end)
+	end)
+
+	if soundId then PlayAnnounceSound(soundId) end
+
+	local closed = false
+	local function close()
+		Elevate()
+		if closed then return end
+		closed = true
+		local OUT = TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		Tween(card, OUT, { Position = UDim2.new(0.5, 0, 0, -height - 40), BackgroundTransparency = 1 })
+		Tween(scale, OUT, { Scale = 0.96 })
+		Tween(cardStroke, OUT, { Transparency = 1 })
+		Tween(glowStroke, OUT, { Transparency = 1 })
+		Tween(badge, OUT, { BackgroundTransparency = 1 })
+		Tween(badgeIcon, OUT, { ImageTransparency = 1 })
+		Tween(badgeFallback, OUT, { TextTransparency = 1 })
+		Tween(titleLabel, OUT, { TextTransparency = 1 })
+		Tween(closeIcon, OUT, { ImageTransparency = 1 })
+		if closeText then Tween(closeText, OUT, { TextTransparency = 1 }) end
+		if descLabel then Tween(descLabel, OUT, { TextTransparency = 1 }) end
+		Tween(track, OUT, { BackgroundTransparency = 1 })
+		Tween(bar, OUT, { BackgroundTransparency = 1 })
+		task.delay(0.24, function() Elevate() pcall(function() slot:Destroy() end) end)
+	end
+
+	closeButton.MouseEnter:Connect(function()
+		Elevate()
+		Tween(closeButton, QUICK, { BackgroundTransparency = 0 })
+		Tween(closeIcon, QUICK, { ImageColor3 = Theme.Text })
+		if closeText then Tween(closeText, QUICK, { TextColor3 = Theme.Text }) end
+	end)
+	closeButton.MouseLeave:Connect(function()
+		Elevate()
+		Tween(closeButton, QUICK, { BackgroundTransparency = 1 })
+		Tween(closeIcon, QUICK, { ImageColor3 = Theme.SubText })
+		if closeText then Tween(closeText, QUICK, { TextColor3 = Theme.SubText }) end
+	end)
+	closeButton.MouseButton1Click:Connect(close)
+
+	task.delay(duration, close)
+	return { Close = close }
+end
+
+-- ---------------------------------------------------------------------------
+-- Backend link: satu loop /sync buat chat + announcement
+-- ---------------------------------------------------------------------------
+
+local Backend = nil
+
+local function HttpGetJson(url)
+	local ok, body = pcall(function() return game:HttpGet(url, true) end)
+	if not ok or type(body) ~= "string" or body == "" then return nil end
+	local okJson, data = pcall(function() return HttpService:JSONDecode(body) end)
+	if not okJson or type(data) ~= "table" then return nil end
+	return data
+end
+
+local function BackendUrl(path, params)
+	local parts = {}
+	for key, value in pairs(params or {}) do
+		parts[#parts + 1] = tostring(key) .. "=" .. HttpService:UrlEncode(tostring(value))
+	end
+	-- cache buster: executor HttpGet suka nyimpen respon
+	parts[#parts + 1] = "t=" .. tostring(os.time()) .. tostring(math.random(1000, 9999))
+	return Backend.Api .. path .. "?" .. table.concat(parts, "&")
+end
+
+local function LocalUserId()
+	local ok, id = pcall(function() return LocalPlayer and LocalPlayer.UserId end)
+	return tostring(ok and id or 0)
+end
+
+local function LocalUserName()
+	local ok, name = pcall(function() return LocalPlayer and LocalPlayer.Name end)
+	return tostring(ok and name or "")
+end
+
+function Sena:ConnectBackend(config)
+	config = config or {}
+	local api = tostring(config.Api or config.Url or ""):gsub("/+$", "")
+	if api == "" then
+		warn("[Sena] ConnectBackend: Api kosong")
+		return nil
+	end
+
+	if Backend and Backend.Running then
+		Backend.Api  = api
+		Backend.Key  = tostring(config.Key or Backend.Key or "")
+		Backend.Game = tostring(config.Game or Backend.Game or "Unknown")
+		return Backend
+	end
+
+	Backend = {
+		Api = api,
+		Key = tostring(config.Key or ""),
+		Game = tostring(config.Game or "Unknown"),
+		Interval = math.max(2, tonumber(config.Interval) or 3),
+		Announcements = config.Announcements ~= false,
+		ChatSince = 0,
+		AnnSince = -1,
+		ChatTtl = 600,
+		ChatMax = 120,
+		Online = 0,
+		Running = true,
+		Connected = false,
+		Listeners = {},
+		History = {},
+	}
+
+	local this = Backend
+	task.spawn(function()
+		Elevate()
+		local uid = LocalUserId()
+		local failures = 0
+		while this.Running and not Sena.Unloaded do
+			local data = HttpGetJson(BackendUrl("/sync", {
+				uid = uid,
+				key = this.Key,
+				chat_since = this.ChatSince,
+				ann_since = this.AnnSince,
+			}))
+
+			if data and data.ok then
+				failures = 0
+				this.Connected = true
+				this.Online = tonumber(data.online) or this.Online
+				this.ChatTtl = tonumber(data.chat_ttl) or this.ChatTtl
+				this.ChatMax = tonumber(data.chat_max) or this.ChatMax
+
+				-- buang riwayat yang udah lewat ttl, biar panel baru ga replay pesan basi
+				local cutoff = os.time() - this.ChatTtl
+				while #this.History > 0 and (tonumber(this.History[1].ts) or 0) < cutoff do
+					table.remove(this.History, 1)
+				end
+
+				if type(data.chat) == "table" then
+					for _, msg in ipairs(data.chat) do
+						local id = tonumber(msg.id) or 0
+						if id > this.ChatSince then this.ChatSince = id end
+						this.History[#this.History + 1] = msg
+						if #this.History > 60 then table.remove(this.History, 1) end
+						for _, fn in ipairs(this.Listeners) do
+							task.spawn(function()
+								Elevate()
+								local ok, err = pcall(fn, msg)
+								if not ok then warn("[Sena] chat listener error:", err) end
+							end)
+						end
+					end
+				end
+
+				local annSeq = tonumber(data.ann_seq)
+				if annSeq then
+					if this.AnnSince < 0 then
+						-- koneksi pertama: catet posisi, jangan replay yang lama
+						this.AnnSince = annSeq
+					elseif type(data.ann) == "table" then
+						for _, ann in ipairs(data.ann) do
+							local id = tonumber(ann.id) or 0
+							if id > this.AnnSince then this.AnnSince = id end
+							if this.Announcements then
+								Sena:Announce({
+									Title = ann.title,
+									Content = ann.text,
+									Duration = tonumber(ann.duration) or 15,
+									Sound = ann.sound,
+								})
+							end
+						end
+					end
+				end
+			else
+				failures = failures + 1
+				this.Connected = false
+			end
+
+			-- backoff pelan kalau server ga kebales
+			local wait = this.Interval
+			if failures > 0 then wait = math.min(30, this.Interval * (1 + failures)) end
+			task.wait(wait)
+		end
+	end)
+
+	return Backend
+end
+
+function Sena:GetBackend() return Backend end
+
+function Sena:DisconnectBackend()
+	if Backend then Backend.Running = false end
+end
+
+function Sena:OnChat(fn)
+	if not Backend or type(fn) ~= "function" then return false end
+	Backend.Listeners[#Backend.Listeners + 1] = fn
+	return true
+end
+
+function Sena:SendChat(text)
+	if not Backend then return false, "not connected" end
+	text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if text == "" then return false, "empty" end
+
+	local data = HttpGetJson(BackendUrl("/chat/send", {
+		uid = LocalUserId(),
+		key = Backend.Key,
+		name = LocalUserName(),
+		game = Backend.Game,
+		text = text,
+	}))
+	if not data then return false, "no response" end
+	if data.ok then return true end
+	return false, tostring(data.error or "error")
+end
+
 function Sena:CreateWindow(config)
 	config = config or {}
 
@@ -2862,6 +3356,373 @@ function Sena:CreateWindow(config)
 				return funcs
 			end
 
+			function Elements:AddLiveChat(itemCfg)
+				itemCfg = itemCfg or {}
+				local cTitle    = tostring(itemCfg.Title or itemCfg[1] or "Live Chat")
+				local height    = math.max(140, tonumber(itemCfg.Height) or 240)
+				local cooldown  = math.max(0, tonumber(itemCfg.Cooldown) or 5)
+				local maxShown  = math.max(20, tonumber(itemCfg.MaxMessages) or 150)
+				local fixedMax  = tonumber(itemCfg.MaxLength)
+
+				-- ikut server (chat_max di config bot) kecuali di-override per panel
+				local function MaxLength()
+					if fixedMax then return math.max(10, fixedMax) end
+					local b = Sena:GetBackend()
+					return math.max(10, tonumber(b and b.ChatMax) or 120)
+				end
+
+				local function ChatTtl()
+					local b = Sena:GetBackend()
+					return math.max(30, tonumber(b and b.ChatTtl) or 600)
+				end
+
+				local function Hex(color)
+					return string.format("#%02X%02X%02X",
+						math.floor(color.R * 255 + 0.5),
+						math.floor(color.G * 255 + 0.5),
+						math.floor(color.B * 255 + 0.5))
+				end
+
+				local function Escape(text)
+					return (tostring(text or "")
+						:gsub("&", "&amp;")
+						:gsub("<", "&lt;")
+						:gsub(">", "&gt;"))
+				end
+
+				itemOrder = itemOrder + 1
+
+				local Row = New("Frame", {
+					Name = "LiveChat",
+					LayoutOrder = itemOrder,
+					BackgroundColor3 = Theme.Element,
+					BorderSizePixel = 0,
+					Size = UDim2.new(1, 0, 0, height),
+					ClipsDescendants = true,
+				}, BodyList)
+				Corner(Row, 6)
+
+				local HEADER_H = 26
+				local BAR_H    = 24
+				local PAD      = 6
+
+				New("TextLabel", {
+					Name = "Title",
+					BackgroundTransparency = 1,
+					Position = UDim2.new(0, 10, 0, 0),
+					Size = UDim2.new(0.6, 0, 0, HEADER_H),
+					Font = Theme.Font,
+					Text = cTitle,
+					TextColor3 = Theme.Text,
+					TextSize = 12,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}, Row)
+
+				local OnlineLabel = New("TextLabel", {
+					Name = "Online",
+					BackgroundTransparency = 1,
+					AnchorPoint = Vector2.new(1, 0),
+					Position = UDim2.new(1, -10, 0, 0),
+					Size = UDim2.new(0.4, 0, 0, HEADER_H),
+					Font = Theme.FontBody,
+					Text = "",
+					TextColor3 = Theme.SubText,
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Right,
+				}, Row)
+
+				local Scroll = New("ScrollingFrame", {
+					Name = "Messages",
+					Position = UDim2.new(0, PAD, 0, HEADER_H),
+					Size = UDim2.new(1, -PAD * 2, 1, -HEADER_H - BAR_H - PAD * 2),
+					BackgroundColor3 = Theme.Card,
+					BorderSizePixel = 0,
+					ScrollBarThickness = 3,
+					ScrollBarImageColor3 = Theme.Track,
+					ScrollingDirection = Enum.ScrollingDirection.Y,
+					CanvasSize = UDim2.new(0, 0, 0, 0),
+					AutomaticCanvasSize = Enum.AutomaticSize.Y,
+					ZIndex = 2,
+				}, Row)
+				Corner(Scroll, 5)
+				Stroke(Scroll, Theme.StrokeSoft, 1)
+				Padding(Scroll, 7, 7, 5, 5)
+
+				New("UIListLayout", {
+					Padding = UDim.new(0, 3),
+					SortOrder = Enum.SortOrder.LayoutOrder,
+				}, Scroll)
+
+				local Bar = New("Frame", {
+					Name = "InputBar",
+					AnchorPoint = Vector2.new(0, 1),
+					Position = UDim2.new(0, PAD, 1, -PAD),
+					Size = UDim2.new(1, -PAD * 2, 0, BAR_H),
+					BackgroundTransparency = 1,
+				}, Row)
+
+				local SEND_W = 58
+
+				local Box = New("TextBox", {
+					Name = "Input",
+					Position = UDim2.new(0, 0, 0, 0),
+					Size = UDim2.new(1, -SEND_W - 6, 1, 0),
+					BackgroundColor3 = Theme.Card,
+					BorderSizePixel = 0,
+					Font = Theme.FontBody,
+					Text = "",
+					PlaceholderText = "Type a message...",
+					PlaceholderColor3 = Theme.Dim,
+					TextColor3 = Theme.Text,
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					ClearTextOnFocus = false,
+					ZIndex = 3,
+				}, Bar)
+				Corner(Box, 5)
+				Stroke(Box, Theme.Stroke, 1)
+				Padding(Box, 7, 7, 0, 0)
+
+				local Send = New("TextButton", {
+					Name = "Send",
+					AnchorPoint = Vector2.new(1, 0),
+					Position = UDim2.new(1, 0, 0, 0),
+					Size = UDim2.new(0, SEND_W, 1, 0),
+					BackgroundColor3 = Theme.Accent,
+					BorderSizePixel = 0,
+					Font = Theme.FontBold,
+					Text = "Send",
+					TextColor3 = Theme.AccentText,
+					TextSize = 11,
+					AutoButtonColor = false,
+					ZIndex = 3,
+				}, Bar)
+				Corner(Send, 5)
+
+				local shown = 0
+				local mineHex = Hex(Theme.Accent)
+				local otherHex = Hex(Theme.SubText)
+				local dimHex = Hex(Theme.Dim)
+
+				local function NearBottom()
+					local ok, result = pcall(function()
+						local canvas = Scroll.AbsoluteCanvasSize.Y
+						local window = Scroll.AbsoluteWindowSize.Y
+						return canvas - window - Scroll.CanvasPosition.Y < 40
+					end)
+					return not ok or result
+				end
+
+				local function ScrollToBottom()
+					task.defer(function()
+						Elevate()
+						pcall(function()
+							local y = Scroll.AbsoluteCanvasSize.Y - Scroll.AbsoluteWindowSize.Y
+							Scroll.CanvasPosition = Vector2.new(0, math.max(0, y))
+						end)
+					end)
+				end
+
+				local function Trim()
+					if shown <= maxShown then return end
+					local oldest, oldestOrder
+					for _, child in ipairs(Scroll:GetChildren()) do
+						if child:IsA("TextLabel") then
+							if not oldestOrder or child.LayoutOrder < oldestOrder then
+								oldest, oldestOrder = child, child.LayoutOrder
+							end
+						end
+					end
+					if oldest then
+						pcall(function() oldest:Destroy() end)
+					end
+				end
+
+				local function AddLine(richText, ts)
+					if not Row.Parent then return end
+					local stick = NearBottom()
+					shown = shown + 1
+					local line = New("TextLabel", {
+						Name = "Line",
+						LayoutOrder = shown,
+						BackgroundTransparency = 1,
+						Size = UDim2.new(1, 0, 0, 0),
+						AutomaticSize = Enum.AutomaticSize.Y,
+						Font = Theme.FontBody,
+						RichText = true,
+						Text = richText,
+						TextColor3 = Theme.Text,
+						TextSize = 11,
+						TextWrapped = true,
+						TextXAlignment = Enum.TextXAlignment.Left,
+						TextYAlignment = Enum.TextYAlignment.Top,
+						ZIndex = 3,
+					}, Scroll)
+					pcall(function() line:SetAttribute("ts", tonumber(ts) or os.time()) end)
+					Trim()
+					if stick then ScrollToBottom() end
+				end
+
+				-- hapus baris yang udah lewat ttl (default 10 menit, ikut server)
+				local function Expire()
+					local cutoff = os.time() - ChatTtl()
+					for _, child in ipairs(Scroll:GetChildren()) do
+						if child:IsA("TextLabel") then
+							local ts = tonumber(child:GetAttribute("ts")) or 0
+							if ts < cutoff then
+								pcall(function() child:Destroy() end)
+							end
+						end
+					end
+				end
+
+				local function Append(msg)
+					if type(msg) ~= "table" then return end
+					local ts = tonumber(msg.ts) or os.time()
+					if ts < os.time() - ChatTtl() then return end
+					local who = Escape(msg.name or "??****") .. " (" .. Escape(msg.game or "?") .. ")"
+					local color = msg.mine and mineHex or otherHex
+					AddLine('<font color="' .. color .. '"><b>' .. who .. '</b></font> : ' .. Escape(msg.text or ""), ts)
+				end
+
+				local function SystemLine(text)
+					AddLine('<font color="' .. dimHex .. '"><i>' .. Escape(text) .. '</i></font>', os.time())
+				end
+
+				local sending = false
+				local lastSent = -math.huge
+
+				local function SetSend(enabled, label)
+					Send.Text = label or "Send"
+					Send.Active = enabled
+					Tween(Send, QUICK, {
+						BackgroundColor3 = enabled and Theme.Accent or Theme.Track,
+						TextColor3 = enabled and Theme.AccentText or Theme.SubText,
+					})
+				end
+
+				local function Countdown(seconds)
+					for i = seconds, 1, -1 do
+						if not Row.Parent then return end
+						SetSend(false, tostring(i) .. "s")
+						task.wait(1)
+					end
+				end
+
+				local function Submit()
+					Elevate()
+					if sending then return end
+					local text = Box.Text:gsub("^%s+", ""):gsub("%s+$", "")
+					if text == "" then return end
+					local limit = MaxLength()
+					if #text > limit then
+						text = text:sub(1, limit)
+					end
+
+					local remaining = cooldown - (os.clock() - lastSent)
+					if remaining > 0 then
+						SystemLine("Wait " .. tostring(math.ceil(remaining)) .. "s before sending again")
+						return
+					end
+
+					sending = true
+					SetSend(false, "...")
+					task.spawn(function()
+						Elevate()
+						local ok, err = Sena:SendChat(text)
+						if ok then
+							lastSent = os.clock()
+							Box.Text = ""
+							Countdown(cooldown)
+						else
+							err = tostring(err or "")
+							local wait = err:match("^cooldown:(%d+)")
+							if wait then
+								SystemLine("Slow down, " .. wait .. "s left")
+								Countdown(tonumber(wait) or cooldown)
+							elseif err == "no response" then
+								SystemLine("Chat server not reachable")
+							else
+								SystemLine("Failed to send: " .. err)
+							end
+						end
+						sending = false
+						if Row.Parent then SetSend(true, "Send") end
+					end)
+				end
+
+				Box.Focused:Connect(function()
+					Elevate()
+					Tween(Box, QUICK, { BackgroundColor3 = Theme.Backdrop })
+				end)
+				Box.FocusLost:Connect(function(enterPressed)
+					Elevate()
+					Tween(Box, QUICK, { BackgroundColor3 = Theme.Card })
+					if enterPressed then Submit() end
+				end)
+				Box:GetPropertyChangedSignal("Text"):Connect(function()
+					local limit = MaxLength()
+					if #Box.Text > limit then
+						Box.Text = Box.Text:sub(1, limit)
+					end
+				end)
+
+				Send.MouseEnter:Connect(function()
+					Elevate()
+					if Send.Active then Tween(Send, QUICK, { BackgroundTransparency = 0.12 }) end
+				end)
+				Send.MouseLeave:Connect(function()
+					Elevate()
+					Tween(Send, QUICK, { BackgroundTransparency = 0 })
+				end)
+				Send.MouseButton1Click:Connect(Submit)
+
+				local backend = Sena:GetBackend()
+				if not backend then
+					SystemLine("Not connected. Call Sena:ConnectBackend({ Api = ..., Key = ..., Game = ... }) first.")
+					SetSend(false, "Send")
+				else
+					for _, msg in ipairs(backend.History) do Append(msg) end
+					Sena:OnChat(function(msg)
+						if Row.Parent then Append(msg) end
+					end)
+
+					task.spawn(function()
+						Elevate()
+						local tick = 0
+						while Row.Parent and not Sena.Unloaded do
+							if backend.Connected then
+								OnlineLabel.Text = "• " .. tostring(backend.Online) .. " online"
+								OnlineLabel.TextColor3 = Theme.SubText
+							else
+								OnlineLabel.Text = "• reconnecting"
+								OnlineLabel.TextColor3 = Theme.Dim
+							end
+							tick = tick + 1
+							if tick % 10 == 0 then Expire() end  -- tiap 20 detik
+							task.wait(2)
+						end
+					end)
+				end
+
+				Register(Row, cTitle .. " chat")
+
+				local funcs = {}
+				function funcs:Append(msg) Append(msg) end
+				function funcs:System(text) SystemLine(text) end
+				function funcs:Clear()
+					for _, child in ipairs(Scroll:GetChildren()) do
+						if child:IsA("TextLabel") then pcall(function() child:Destroy() end) end
+					end
+					shown = 0
+				end
+				function funcs:Send(text)
+					Box.Text = tostring(text or "")
+					Submit()
+				end
+				return funcs
+			end
+
 			function Elements:AddConfigPanel(itemCfg)
 				itemCfg = itemCfg or {}
 
@@ -3209,6 +4070,7 @@ function Sena:CreateWindow(config)
 			end
 
 			Elements.AddConfig = Elements.AddConfigPanel
+			Elements.AddPanelConfig = Elements.AddConfigPanel
 
 			Section.Api = Elements
 			return Elements
@@ -3234,5 +4096,16 @@ function Sena:CreateWindow(config)
 
 	return Window
 end
+
+
+-- Auto-connect ke backend kalau loader udah nyiapin getgenv().SenaBackend,
+-- biar announcement jalan di semua hub tanpa ngubah script hub-nya.
+task.defer(function()
+	Elevate()
+	local ok, cfg = pcall(function() return getgenv and getgenv().SenaBackend end)
+	if ok and type(cfg) == "table" and not Backend then
+		Sena:ConnectBackend(cfg)
+	end
+end)
 
 return Sena
