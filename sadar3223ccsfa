@@ -3075,6 +3075,7 @@ function Sena:CreateWindow(config)
 				end
 
 				local rows = {}
+				local rowsDirty = true  -- baris opsi dibangun lazy pas pertama dibuka
 
 				local function RefreshRowVisuals()
 					Elevate()
@@ -3110,6 +3111,10 @@ function Sena:CreateWindow(config)
 				local function SetOpen(state)
 					Elevate()
 					isOpen = state and true or false
+					if isOpen and rowsDirty then
+						BuildRows()
+						rowsDirty = false
+					end
 					local height = isOpen and ListHeight() or 0
 					SetExtra(isOpen and (height + 8) or 0)
 					Tween(ControlArrow, QUICK, { Rotation = isOpen and 180 or 0 })
@@ -3211,7 +3216,7 @@ function Sena:CreateWindow(config)
 					selected = defaults
 				end
 
-				BuildRows()
+				UpdateLabel()
 				Register(Row, dTitle .. " " .. dDesc)
 
 				function funcs:Set(newValue, skipCallback)
@@ -3241,7 +3246,8 @@ function Sena:CreateWindow(config)
 					options = newOptions or {}
 					funcs.Options = options
 					if not keepSelection then selected = {} end
-					BuildRows()
+					rowsDirty = true
+					UpdateLabel()
 					if isOpen then SetOpen(true) end
 				end
 				funcs.SetOptions = funcs.Refresh
@@ -3249,7 +3255,7 @@ function Sena:CreateWindow(config)
 
 				function funcs:AddOption(optionName)
 					table.insert(options, tostring(optionName))
-					BuildRows()
+					rowsDirty = true
 					if isOpen then SetOpen(true) end
 				end
 
