@@ -4098,14 +4098,38 @@ function Sena:CreateWindow(config)
 end
 
 
--- Auto-connect ke backend kalau loader udah nyiapin getgenv().SenaBackend,
--- biar announcement jalan di semua hub tanpa ngubah script hub-nya.
+-- Auto-connect ke backend. getgenv().SenaBackend (diset loader) bisa override
+-- Api / Key / Game; kalau ga ada, pakai default di bawah biar announcement +
+-- live chat tetep jalan walaupun hub dieksekusi langsung tanpa loader.
+-- Set getgenv().SenaBackend = { Disabled = true } buat matiin.
+local DEFAULT_BACKEND = {
+	Api = "http://104.207.76.132:8080",
+	Key = "sena_20VvixjHsd1OPPwgHYJAstpM",
+}
+
+local function DetectGameName()
+	local ok, info = pcall(function()
+		return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
+	end)
+	if ok and type(info) == "table" and type(info.Name) == "string" and info.Name ~= "" then
+		return info.Name
+	end
+	return "PlaceId " .. tostring(game.PlaceId)
+end
+
 task.defer(function()
 	Elevate()
+	if Backend then return end
 	local ok, cfg = pcall(function() return getgenv and getgenv().SenaBackend end)
-	if ok and type(cfg) == "table" and not Backend then
-		Sena:ConnectBackend(cfg)
-	end
+	cfg = (ok and type(cfg) == "table") and cfg or {}
+	if cfg.Disabled then return end
+	Sena:ConnectBackend({
+		Api = cfg.Api or DEFAULT_BACKEND.Api,
+		Key = cfg.Key or DEFAULT_BACKEND.Key,
+		Game = cfg.Game or DetectGameName(),
+		Interval = cfg.Interval,
+		Announcements = cfg.Announcements,
+	})
 end)
 
 return Sena
