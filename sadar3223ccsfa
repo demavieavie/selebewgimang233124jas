@@ -928,43 +928,34 @@ local function LocalUserName()
 	return tostring(ok and name or "")
 end
 
-function Sena:ConnectBackend(config)
-	config = config or {}
-	local api = tostring(config.Api or config.Url or ""):gsub("/+$", "")
-	if api == "" then
-		warn("[Sena] ConnectBackend: Api kosong")
-		return nil
+-- Default kalau loader ga nyetel getgenv().SenaBackend. Nama game diambil
+-- dari MarketplaceService pas loop pertama jalan (yield, jadi jangan di main thread).
+local DEFAULT_BACKEND = {
+	Api = "http://104.207.76.132:8080",
+	Key = "sena_20VvixjHsd1OPPwgHYJAstpM",
+}
+
+local function DetectGameName()
+	local ok, info = pcall(function()
+		return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
+	end)
+	if ok and type(info) == "table" and type(info.Name) == "string" and info.Name ~= "" then
+		return info.Name
 	end
+	return "PlaceId " .. tostring(game.PlaceId)
+end
 
-	if Backend and Backend.Running then
-		Backend.Api  = api
-		Backend.Key  = tostring(config.Key or Backend.Key or "")
-		Backend.Game = tostring(config.Game or Backend.Game or "Unknown")
-		return Backend
-	end
-
-	Backend = {
-		Api = api,
-		Key = tostring(config.Key or ""),
-		Game = tostring(config.Game or "Unknown"),
-		Interval = math.max(2, tonumber(config.Interval) or 3),
-		Announcements = config.Announcements ~= false,
-		ChatSince = 0,
-		AnnSince = -1,
-		ChatTtl = 600,
-		ChatMax = 120,
-		Online = 0,
-		Running = true,
-		Connected = false,
-		Listeners = {},
-		History = {},
-	}
-
-	local this = Backend
+local function StartBackendLoop(this)
+	if this.LoopAlive then return end
+	this.LoopAlive = true
 	task.spawn(function()
 		Elevate()
 		local uid = LocalUserId()
 		local failures = 0
+		if not this.Game or this.Game == "" then this.Game = DetectGameName() end
+
+		-- berhenti kalau Disconnect, atau lib ini di-unload (Window:Destroy).
+		-- CreateWindow berikutnya manggil ConnectBackend lagi buat nyalain ulang.
 		while this.Running and not Sena.Unloaded do
 			local data = HttpGetJson(BackendUrl("/sync", {
 				uid = uid,
@@ -980,7 +971,6 @@ function Sena:ConnectBackend(config)
 				this.ChatTtl = tonumber(data.chat_ttl) or this.ChatTtl
 				this.ChatMax = tonumber(data.chat_max) or this.ChatMax
 
-				-- buang riwayat yang udah lewat ttl, biar panel baru ga replay pesan basi
 				local cutoff = os.time() - this.ChatTtl
 				while #this.History > 0 and (tonumber(this.History[1].ts) or 0) < cutoff do
 					table.remove(this.History, 1)
@@ -1005,7 +995,6 @@ function Sena:ConnectBackend(config)
 				local annSeq = tonumber(data.ann_seq)
 				if annSeq then
 					if this.AnnSince < 0 then
-						-- koneksi pertama: catet posisi, jangan replay yang lama
 						this.AnnSince = annSeq
 					elseif type(data.ann) == "table" then
 						for _, ann in ipairs(data.ann) do
@@ -1027,13 +1016,52 @@ function Sena:ConnectBackend(config)
 				this.Connected = false
 			end
 
-			-- backoff pelan kalau server ga kebales
 			local wait = this.Interval
 			if failures > 0 then wait = math.min(30, this.Interval * (1 + failures)) end
 			task.wait(wait)
 		end
+		this.LoopAlive = false
+		this.Connected = false
 	end)
+end
 
+function Sena:ConnectBackend(config)
+	config = config or {}
+	if config.Disabled then return nil end
+
+	if not Backend then
+		local api = tostring(config.Api or DEFAULT_BACKEND.Api or ""):gsub("/+$", "")
+		if api == "" then
+			warn("[Sena] ConnectBackend: Api kosong")
+			return nil
+		end
+		Backend = {
+			Api = api,
+			Key = tostring(config.Key or DEFAULT_BACKEND.Key or ""),
+			Game = config.Game and tostring(config.Game) or nil,
+			Interval = math.max(2, tonumber(config.Interval) or 3),
+			Announcements = config.Announcements ~= false,
+			ChatSince = 0,
+			AnnSince = -1,
+			ChatTtl = 600,
+			ChatMax = 120,
+			Online = 0,
+			Running = true,
+			Connected = false,
+			LoopAlive = false,
+			Listeners = {},
+			History = {},
+		}
+	else
+		if config.Api then Backend.Api = tostring(config.Api):gsub("/+$", "") end
+		if config.Key then Backend.Key = tostring(config.Key) end
+		if config.Game then Backend.Game = tostring(config.Game) end
+		if config.Interval then Backend.Interval = math.max(2, tonumber(config.Interval) or Backend.Interval) end
+		if config.Announcements ~= nil then Backend.Announcements = config.Announcements ~= false end
+		Backend.Running = true
+	end
+
+	StartBackendLoop(Backend)
 	return Backend
 end
 
@@ -1068,6 +1096,14 @@ end
 
 function Sena:CreateWindow(config)
 	config = config or {}
+
+	-- Window baru berarti lib ini dipakai lagi. Kalau tabel lib-nya dishare
+	-- antar re-execute, Window:Destroy sebelumnya udah matiin loop backend;
+	-- nyalain lagi di sini.
+	Sena.Unloaded = false
+	if Backend and not Backend.LoopAlive then
+		Sena:ConnectBackend()
+	end
 
 	local title      = tostring(config.Title or config[1] or "Sena")
 	local subTitle   = tostring(config.SubTitle or config.Description or config[2] or "")
@@ -4099,37 +4135,12 @@ end
 
 
 -- Auto-connect ke backend. getgenv().SenaBackend (diset loader) bisa override
--- Api / Key / Game; kalau ga ada, pakai default di bawah biar announcement +
--- live chat tetep jalan walaupun hub dieksekusi langsung tanpa loader.
+-- Api / Key / Game; kalau ga ada, ConnectBackend pakai DEFAULT_BACKEND.
 -- Set getgenv().SenaBackend = { Disabled = true } buat matiin.
-local DEFAULT_BACKEND = {
-	Api = "http://104.207.76.132:8080",
-	Key = "sena_20VvixjHsd1OPPwgHYJAstpM",
-}
-
-local function DetectGameName()
-	local ok, info = pcall(function()
-		return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
-	end)
-	if ok and type(info) == "table" and type(info.Name) == "string" and info.Name ~= "" then
-		return info.Name
-	end
-	return "PlaceId " .. tostring(game.PlaceId)
-end
-
 task.defer(function()
 	Elevate()
-	if Backend then return end
 	local ok, cfg = pcall(function() return getgenv and getgenv().SenaBackend end)
-	cfg = (ok and type(cfg) == "table") and cfg or {}
-	if cfg.Disabled then return end
-	Sena:ConnectBackend({
-		Api = cfg.Api or DEFAULT_BACKEND.Api,
-		Key = cfg.Key or DEFAULT_BACKEND.Key,
-		Game = cfg.Game or DetectGameName(),
-		Interval = cfg.Interval,
-		Announcements = cfg.Announcements,
-	})
+	Sena:ConnectBackend((ok and type(cfg) == "table") and cfg or {})
 end)
 
 return Sena
