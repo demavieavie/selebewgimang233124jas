@@ -577,7 +577,7 @@ end
 -- ---------------------------------------------------------------------------
 
 local AnnounceGui, AnnounceHolder
-local ANNOUNCE_SOUND = "rbxasset://sounds/electronicpingshort.wav"
+local ANNOUNCE_SOUND = "rbxassetid://98803745831281"
 local ANNOUNCE_WIDTH = 400
 
 local function EnsureAnnounceGui()
@@ -970,6 +970,10 @@ local function StartBackendLoop(this)
 				this.Online = tonumber(data.online) or this.Online
 				this.ChatTtl = tonumber(data.chat_ttl) or this.ChatTtl
 				this.ChatMax = tonumber(data.chat_max) or this.ChatMax
+				-- server yang nentuin seberapa sering client poll (config poll_interval),
+				-- biar beban bisa diturunin dari /config set tanpa upload ulang lib
+				local poll = tonumber(data.poll)
+				if poll then this.Interval = math.max(2, poll) end
 
 				local cutoff = os.time() - this.ChatTtl
 				while #this.History > 0 and (tonumber(this.History[1].ts) or 0) < cutoff do
