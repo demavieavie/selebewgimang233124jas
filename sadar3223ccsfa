@@ -7,6 +7,19 @@ local HttpService        = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
 
+-- Touch-only device (HP / tablet tanpa keyboard): window ngisi layar, target
+-- sentuh dibesarin, satu kolom. Desktop ga berubah. Preview di desktop:
+-- getgenv().SenaForceTouch = true sebelum load.
+local IS_TOUCH = false
+do
+	local ok, forced = pcall(function() return getgenv and getgenv().SenaForceTouch end)
+	if ok and forced then
+		IS_TOUCH = true
+	else
+		IS_TOUCH = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+	end
+end
+
 local SetIdentity = nil
 do
 	local ok = pcall(function() return setthreadidentity end)
@@ -341,9 +354,39 @@ local function ApplyIcon(image, name, size)
 	image.ImageRectSize = Vector2.new(0, 0)
 end
 
-local DESC_LINE = 13
-local ROW_PAD   = 10
-local TITLE_H   = 15
+local DESC_LINE = IS_TOUCH and 15 or 13
+local ROW_PAD   = IS_TOUCH and 12 or 10
+local TITLE_H   = IS_TOUCH and 17 or 15
+local ROW_MIN   = IS_TOUCH and 44 or 34   -- tinggi minimum baris elemen
+local SEC_H     = IS_TOUCH and 42 or 34   -- tinggi header section
+local OPT_H     = IS_TOUCH and 38 or 25   -- tinggi tiap opsi dropdown
+local CTRL_H    = IS_TOUCH and 30 or 22   -- tinggi kotak input / dropdown control
+local BAR_W     = IS_TOUCH and 6 or 2     -- tebal scrollbar
+local TAP_SLOP  = 14                      -- geser lebih dari ini = scroll, bukan tap
+
+-- Tap yang beneran tap. Di HP, MouseButton1Click ikut kepicu pas jari geser
+-- pendek buat scroll, jadi section ketutup / toggle kebalik sendiri.
+local function OnTap(button, fn)
+	local startPos, moved = nil, 0
+	button.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			startPos, moved = input.Position, 0
+		end
+	end)
+	button.InputChanged:Connect(function(input)
+		if startPos and (input.UserInputType == Enum.UserInputType.Touch
+			or input.UserInputType == Enum.UserInputType.MouseMovement) then
+			moved = math.max(moved, (input.Position - startPos).Magnitude)
+		end
+	end)
+	button.MouseButton1Click:Connect(function()
+		local m = moved
+		startPos, moved = nil, 0
+		if m > TAP_SLOP then return end
+		fn()
+	end)
+end
 
 local function CountLines(text, width, font, textSize, maxLines)
 	text = tostring(text or "")
@@ -577,7 +620,7 @@ end
 -- ---------------------------------------------------------------------------
 
 local AnnounceGui, AnnounceHolder
-local ANNOUNCE_SOUND = "rbxassetid://98803745831281"
+local ANNOUNCE_SOUND = "rbxasset://sounds/electronicpingshort.wav"
 local ANNOUNCE_WIDTH = 400
 
 local function EnsureAnnounceGui()
@@ -931,7 +974,7 @@ end
 -- Default kalau loader ga nyetel getgenv().SenaBackend. Nama game diambil
 -- dari MarketplaceService pas loop pertama jalan (yield, jadi jangan di main thread).
 local DEFAULT_BACKEND = {
-	Api = "http://104.207.76.132:8080",
+	Api = "http://56.10.112.179:8080",
 	Key = "sena_20VvixjHsd1OPPwgHYJAstpM",
 }
 
@@ -1112,6 +1155,7 @@ function Sena:CreateWindow(config)
 	local title      = tostring(config.Title or config[1] or "Sena")
 	local subTitle   = tostring(config.SubTitle or config.Description or config[2] or "")
 	local size       = config.Size or UDim2.fromOffset(680, 452)
+
 	local logo       = config.Logo or ""
 	local discord    = tostring(config.Discord or "dsc.gg/senahub")
 	local version    = tostring(config.Version or "v1.0")
@@ -1178,10 +1222,17 @@ function Sena:CreateWindow(config)
 			local vp = cam and cam.ViewportSize or Vector2.new(1920, 1080)
 			local w = size.X.Scale * vp.X + size.X.Offset
 			local h = size.Y.Scale * vp.Y + size.Y.Offset
-			local touch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
-			local room = touch and 0.86 or 0.94
 			if w > 0 and h > 0 and vp.X > 0 and vp.Y > 0 then
-				fit = math.min(1, (vp.X * room) / w, (vp.Y * room) / h)
+				if IS_TOUCH then
+					-- HP: jangan ciutin skala (teks/tombol jadi ga bisa dipegang).
+					-- Kecilin ukuran window-nya sampai muat, isinya tetep 100%
+					-- dan tinggal di-scroll. Tablet yang muat ga berubah.
+					local maxW, maxH = vp.X * 0.92, vp.Y * 0.90
+					Main.Size = UDim2.fromOffset(math.min(w, maxW), math.min(h, maxH))
+					fit = 1
+				else
+					fit = math.min(1, (vp.X * 0.94) / w, (vp.Y * 0.94) / h)
+				end
 			end
 		end
 		baseScale = math.clamp(fit * userScale, 0.4, 1.5)
@@ -2155,7 +2206,7 @@ function Sena:CreateWindow(config)
 			BorderSizePixel = 0,
 			Size = UDim2.new(1, 0, 1, 0),
 			CanvasSize = UDim2.new(0, 0, 0, 0),
-			ScrollBarThickness = 2,
+			ScrollBarThickness = BAR_W,
 			ScrollBarImageColor3 = Theme.Track,
 			ScrollingDirection = Enum.ScrollingDirection.Y,
 			Visible = false,
@@ -2193,6 +2244,7 @@ function Sena:CreateWindow(config)
 		}, RightColumn)
 
 		local singleColumn = cfg.Columns == 1 or cfg.SingleColumn == true
+			or (IS_TOUCH and cfg.Columns ~= 2)
 		if singleColumn then
 			RightColumn.Visible = false
 		end
@@ -2260,7 +2312,7 @@ function Sena:CreateWindow(config)
 				LayoutOrder = Tab.SectionCount,
 				BackgroundColor3 = Theme.Card,
 				BorderSizePixel = 0,
-				Size = UDim2.new(1, 0, 0, 34),
+				Size = UDim2.new(1, 0, 0, SEC_H),
 				ClipsDescendants = true,
 			}, parentColumn)
 			Corner(SectionFrame, 8)
@@ -2269,7 +2321,7 @@ function Sena:CreateWindow(config)
 			local Header = New("TextButton", {
 				Name = "Header",
 				BackgroundTransparency = 1,
-				Size = UDim2.new(1, 0, 0, 34),
+				Size = UDim2.new(1, 0, 0, SEC_H),
 				Text = "",
 				AutoButtonColor = false,
 			}, SectionFrame)
@@ -2310,7 +2362,7 @@ function Sena:CreateWindow(config)
 			local Body = New("Frame", {
 				Name = "Body",
 				BackgroundTransparency = 1,
-				Position = UDim2.new(0, 0, 0, 32),
+				Position = UDim2.new(0, 0, 0, SEC_H - 2),
 				Size = UDim2.new(1, 0, 0, 0),
 				ClipsDescendants = true,
 			}, SectionFrame)
@@ -2337,7 +2389,7 @@ function Sena:CreateWindow(config)
 				BodyList.Size = UDim2.new(1, 0, 0, contentH)
 				Body.Size = UDim2.new(1, 0, 0, Section.Open and bodyH or 0)
 
-				local total = 32 + (Section.Open and bodyH or 0)
+				local total = (SEC_H - 2) + (Section.Open and bodyH or 0)
 				if instant then
 					SectionFrame.Size = UDim2.new(1, 0, 0, total)
 				else
@@ -2359,7 +2411,7 @@ function Sena:CreateWindow(config)
 				Resize(true)
 			end)
 
-			Header.MouseButton1Click:Connect(function()
+			OnTap(Header, function()
 				Elevate()
 				Section:SetOpen(not Section.Open)
 			end)
@@ -2376,7 +2428,7 @@ function Sena:CreateWindow(config)
 					LayoutOrder = itemOrder,
 					BackgroundColor3 = Theme.Element,
 					BorderSizePixel = 0,
-					Size = UDim2.new(1, 0, 0, 34),
+					Size = UDim2.new(1, 0, 0, ROW_MIN),
 				}, BodyList)
 				Corner(Row, 6)
 
@@ -2425,7 +2477,7 @@ function Sena:CreateWindow(config)
 					end
 
 					local base = ROW_PAD + TITLE_H + (lines > 0 and (1 + lines * DESC_LINE) or 0) + ROW_PAD
-					if lines == 0 then base = 34 end
+					if lines == 0 then base = ROW_MIN end
 
 					Row.Size = UDim2.new(1, 0, 0, base + (extraBottom or 0) + extra)
 				end
@@ -2647,7 +2699,7 @@ function Sena:CreateWindow(config)
 				ApplyIcon(Arrow, "chevron-right", 48)
 
 				local Click = ClickCatcher(Row)
-				Click.MouseButton1Click:Connect(function()
+				OnTap(Click, function()
 					Elevate()
 					Tween(Arrow, QUICK, { Position = UDim2.new(1, -6, 0, ROW_PAD + 1) })
 					task.delay(0.12, function()
@@ -2735,7 +2787,7 @@ function Sena:CreateWindow(config)
 				end
 
 				local Click = ClickCatcher(Row)
-				Click.MouseButton1Click:Connect(function() SetValue(not value) end)
+				OnTap(Click, function() SetValue(not value) end)
 
 				Render(false)
 				Register(Row, tTitle .. " " .. tDesc)
@@ -2916,7 +2968,7 @@ function Sena:CreateWindow(config)
 				local Box = New("TextBox", {
 					AnchorPoint = Vector2.new(1, 0),
 					Position = UDim2.new(1, -10, 0, ROW_PAD - 3),
-					Size = UDim2.new(0, boxWidth, 0, 22),
+					Size = UDim2.new(0, boxWidth, 0, CTRL_H),
 					BackgroundColor3 = Theme.Card,
 					BorderSizePixel = 0,
 					Font = Theme.FontBody,
@@ -2983,7 +3035,7 @@ function Sena:CreateWindow(config)
 				local default  = itemCfg.Default
 				local callback = itemCfg.Callback or function() end
 				local flag     = itemCfg.Flag
-				local maxList  = tonumber(itemCfg.MaxVisible) or 5
+				local maxList  = tonumber(itemCfg.MaxVisible) or (IS_TOUCH and 6 or 5)
 
 				local Row, TitleLabel, _, Recalculate, SetExtra = BuildRow("Dropdown", dTitle, dDesc, 114, 0)
 
@@ -2991,7 +3043,7 @@ function Sena:CreateWindow(config)
 					Name = "Control",
 					AnchorPoint = Vector2.new(1, 0),
 					Position = UDim2.new(1, -10, 0, ROW_PAD - 3),
-					Size = UDim2.new(0, 98, 0, 22),
+					Size = UDim2.new(0, IS_TOUCH and 120 or 98, 0, CTRL_H),
 					BackgroundColor3 = Theme.Card,
 					BorderSizePixel = 0,
 					Text = "",
@@ -3040,7 +3092,7 @@ function Sena:CreateWindow(config)
 					BorderSizePixel = 0,
 					Size = UDim2.new(1, 0, 1, 0),
 					CanvasSize = UDim2.new(0, 0, 0, 0),
-					ScrollBarThickness = 2,
+					ScrollBarThickness = BAR_W,
 					ScrollBarImageColor3 = Theme.Track,
 					ZIndex = 3,
 				}, ListHolder)
@@ -3110,7 +3162,7 @@ function Sena:CreateWindow(config)
 					local count = #options
 					if count == 0 then return 30 end
 					local visible = math.min(count, maxList)
-					return visible * 25 + (visible - 1) * 3 + 8
+					return visible * OPT_H + (visible - 1) * 3 + 8
 				end
 
 				local function SetOpen(state)
@@ -3157,7 +3209,7 @@ function Sena:CreateWindow(config)
 							LayoutOrder = index,
 							BackgroundColor3 = Theme.Element,
 							BorderSizePixel = 0,
-							Size = UDim2.new(1, 0, 0, 25),
+							Size = UDim2.new(1, 0, 0, OPT_H),
 							Text = "",
 							AutoButtonColor = false,
 							ZIndex = 4,
@@ -3188,7 +3240,7 @@ function Sena:CreateWindow(config)
 						}, OptionFrame)
 						Corner(Check, 3)
 
-						OptionFrame.MouseButton1Click:Connect(function()
+						OnTap(OptionFrame, function()
 							Elevate()
 							if multi then
 								selected[optionName] = not selected[optionName] or nil
@@ -3209,7 +3261,7 @@ function Sena:CreateWindow(config)
 					UpdateLabel()
 				end
 
-				Control.MouseButton1Click:Connect(function() SetOpen(not isOpen) end)
+				OnTap(Control, function() SetOpen(not isOpen) end)
 
 				do
 					local defaults = {}
@@ -4118,6 +4170,7 @@ function Sena:CreateWindow(config)
 
 			Elements.AddConfig = Elements.AddConfigPanel
 			Elements.AddPanelConfig = Elements.AddConfigPanel
+			Elements.AddChat = Elements.AddLiveChat
 
 			Section.Api = Elements
 			return Elements
