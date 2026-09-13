@@ -620,7 +620,7 @@ end
 -- ---------------------------------------------------------------------------
 
 local AnnounceGui, AnnounceHolder
-local ANNOUNCE_SOUND = "rbxasset://sounds/electronicpingshort.wav"
+local ANNOUNCE_SOUND = "rbxasset://98803745831281"
 local ANNOUNCE_WIDTH = 400
 
 local function EnsureAnnounceGui()
