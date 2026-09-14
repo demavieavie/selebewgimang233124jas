@@ -3800,6 +3800,8 @@ function Sena:CreateWindow(config)
 				end
 
 				local AVATAR = 24
+				local NameToIdCache = {}
+
 				local function AddMessage(msg)
 					if not Row.Parent then return end
 					local stick = NearBottom()
@@ -3840,22 +3842,52 @@ function Sena:CreateWindow(config)
 						TextSize = 12,
 						ZIndex = 5,
 					}, avatar)
-					-- headshot Roblox asli kalau server ngasih uid pengirim; inisial tetap
-					-- di bawahnya sebagai fallback sampai gambarnya ke-load
-					local av = tostring(msg.av or "")
-					if av:match("^%d+$") then
-						-- transparan penuh = ga pernah di-render = ga pernah di-load, jadi
-						-- gambarnya langsung opaque; sebelum ke-load dia kosong dan inisial
-						-- di bawahnya yang keliatan
-						local pic = New("ImageLabel", {
-							Name = "Head",
-							BackgroundTransparency = 1,
-							BorderSizePixel = 0,
-							Size = UDim2.new(1, 0, 1, 0),
-							Image = "rbxthumb://type=AvatarHeadShot&id=" .. av .. "&w=48&h=48",
-							ZIndex = 6,
-						}, avatar)
-						Corner(pic, AVATAR / 2)
+
+					local function applyHeadshot(targetUid)
+						if not avatar or not avatar.Parent then return end
+						local head = avatar:FindFirstChild("Head")
+						if head then
+							head.Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(targetUid) .. "&w=48&h=48"
+						else
+							local pic = New("ImageLabel", {
+								Name = "Head",
+								BackgroundTransparency = 1,
+								BorderSizePixel = 0,
+								Size = UDim2.new(1, 0, 1, 0),
+								Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(targetUid) .. "&w=48&h=48",
+								ZIndex = 6,
+							}, avatar)
+							Corner(pic, AVATAR / 2)
+						end
+					end
+
+					local av = tostring(msg.av or msg.uid or "")
+					if av == "" and mine then
+						av = LocalUserId()
+					end
+
+					if av:match("^%d+$") and av ~= "0" then
+						applyHeadshot(av)
+					elseif not name:find("%*") and name ~= "" then
+						if NameToIdCache[name] then
+							applyHeadshot(NameToIdCache[name])
+						else
+							task.spawn(function()
+								local inGame = Players:FindFirstChild(name)
+								if inGame and inGame.UserId > 0 then
+									NameToIdCache[name] = tostring(inGame.UserId)
+									applyHeadshot(inGame.UserId)
+									return
+								end
+								local okId, fetchedId = pcall(function()
+									return Players:GetUserIdFromNameAsync(name)
+								end)
+								if okId and fetchedId and tonumber(fetchedId) and tonumber(fetchedId) > 0 then
+									NameToIdCache[name] = tostring(fetchedId)
+									applyHeadshot(fetchedId)
+								end
+							end)
+						end
 					end
 
 					local left = AVATAR + 8
@@ -4509,11 +4541,25 @@ function Sena:CreateWindow(config)
 					return labels
 				end
 
-				local function PickPet(needCategory)
+				local function PickPet(needCategory, targetTier)
 					st.RefreshPets()
 					if needCategory then
 						for _, pet in pairs(st.pets) do
 							if tostring(pet.Category) == tostring(needCategory) then return pet end
+						end
+						if targetTier and targetTier ~= st.tier then
+							local okT, listT = pcall(getPets, targetTier)
+							if okT and type(listT) == "table" then
+								for _, pet in ipairs(listT) do
+									if tostring(pet.Category) == tostring(needCategory) then return pet end
+								end
+							end
+						end
+						local okA, listA = pcall(getPets, nil)
+						if okA and type(listA) == "table" then
+							for _, pet in ipairs(listA) do
+								if tostring(pet.Category) == tostring(needCategory) then return pet end
+							end
 						end
 						return nil
 					end
@@ -4563,42 +4609,71 @@ function Sena:CreateWindow(config)
 				local StopBroadcast
 
 				-- ---- join (dipanggil dari AddFuseList lewat FuseCore) ---------------
-				local function Join(entry)
-					if st.busy then return end
+				local function Join(entry, onFeedback)
+					local now = os.clock()
+					if st.busy and (now - (st._busyAt or 0) < 4) then
+						if onFeedback then onFeedback("busy") end
+						return
+					end
 					st.busy = true
+					st._busyAt = now
 					task.spawn(function()
 						Elevate()
-						local pet = PickPet(entry.need)
-						if not pet then
-							SetStatus(L("NeedPet", "You need ") .. tostring(entry.need) .. L("NeedPetTail", " (not favorited, not in your pen) to join."))
+						local ok, err = pcall(function()
+							local pet = PickPet(entry.need, entry.tier)
+							if not pet then
+								local needText = tostring(entry.need or "?")
+								SetStatus(L("NeedPet", "You need ") .. needText .. L("NeedPetTail", " (not favorited, not in your pen) to join."))
+								pcall(function()
+									if Sena and Sena.Notify then
+										Sena:Notify({
+											Title = L("ListTitle", "Partner Fuse"),
+											Content = L("NeedPet", "You need ") .. needText .. L("NeedPetTail", " (not favorited, not in your pen) to join."),
+											Duration = 4,
+										})
+									end
+								end)
+								if onFeedback then onFeedback("need_pet", needText) end
+								st.busy = false
+								return
+							end
+							if onFeedback then onFeedback("claiming") end
+							SetStatus(L("Claiming", "Claiming the spot..."))
+							local data, callErr = Call("/fuse/claim", { id = entry.id, cat = pet.Category, pet = pet.Uid })
+							if not data or callErr then
+								local msg = tostring(callErr or "error")
+								if msg == "taken" then msg = L("Taken", "Someone else just took it.") end
+								if msg:match("^blocked:") then msg = L("Blocked", "You are blocked from partner matching for a while.") end
+								if msg == "stop_your_post_first" then msg = L("StopFirst", "Stop your own broadcast first.") end
+								SetStatus(msg)
+								pcall(function()
+									if Sena and Sena.Notify then
+										Sena:Notify({ Title = L("ListTitle", "Partner Fuse"), Content = msg, Duration = 3 })
+									end
+								end)
+								if onFeedback then onFeedback("error", msg) end
+								st.busy = false
+								return
+							end
+							if tostring(data.job) == tostring(game.JobId) then
+								Call("/fuse/arrived", { id = entry.id })
+								st.busy = false
+								return  -- /sync berikutnya bawa state matched -> OnMatched
+							end
+							SetStatus(L("Teleporting", "Joining ") .. tostring(data.partner or "?") .. L("TeleportingTail", "'s server..."))
+							st.teleporting = true
+							local okT, res, terr = pcall(teleport, data.job, data.place)
+							if not okT or not res then
+								st.teleporting = false
+								Call("/fuse/fail", { id = entry.id, reason = "teleport" })
+								SetStatus(L("TeleportFailed", "Teleport failed: ") .. tostring(terr or res or "unknown"))
+							end
 							st.busy = false
-							return
-						end
-						SetStatus(L("Claiming", "Claiming the spot..."))
-						local data, err = Call("/fuse/claim", { id = entry.id, cat = pet.Category, pet = pet.Uid })
-						if not data or err then
-							local msg = tostring(err or "error")
-							if msg == "taken" then msg = L("Taken", "Someone else just took it.") end
-							if msg:match("^blocked:") then msg = L("Blocked", "You are blocked from partner matching for a while.") end
-							if msg == "stop_your_post_first" then msg = L("StopFirst", "Stop your own broadcast first.") end
-							SetStatus(msg)
+						end)
+						if not ok then
 							st.busy = false
-							return
+							warn("[SenaLib] Join error:", err)
 						end
-						if tostring(data.job) == tostring(game.JobId) then
-							Call("/fuse/arrived", { id = entry.id })
-							st.busy = false
-							return  -- /sync berikutnya bawa state matched -> OnMatched
-						end
-						SetStatus(L("Teleporting", "Joining ") .. tostring(data.partner or "?") .. L("TeleportingTail", "'s server..."))
-						st.teleporting = true
-						local okT, res, terr = pcall(teleport, data.job, data.place)
-						if not okT or not res then
-							st.teleporting = false
-							Call("/fuse/fail", { id = entry.id, reason = "teleport" })
-							SetStatus(L("TeleportFailed", "Teleport failed: ") .. tostring(terr or res or "unknown"))
-						end
-						st.busy = false
 					end)
 				end
 				FuseCore.join = Join
@@ -4880,7 +4955,8 @@ function Sena:CreateWindow(config)
 							TextXAlignment = Enum.TextXAlignment.Left,
 						}, row)
 						local btn = New("TextButton", {
-							ZIndex = 4,
+							Active = true,
+							ZIndex = 5,
 							AnchorPoint = Vector2.new(1, 0.5),
 							Position = UDim2.new(1, -6, 0.5, 0),
 							Size = UDim2.new(0, JOIN_W, 0, ROW_H - 14),
@@ -4897,13 +4973,48 @@ function Sena:CreateWindow(config)
 						local hoverColor = mine and Theme.ElementHover or Color3.fromRGB(255, 255, 255)
 						btn.MouseEnter:Connect(function() Elevate() Tween(btn, QUICK, { BackgroundColor3 = hoverColor }) end)
 						btn.MouseLeave:Connect(function() Elevate() Tween(btn, QUICK, { BackgroundColor3 = restColor }) end)
-						OnTap(btn, function()
+
+						local clickDebounce = false
+						local function doClick()
+							if clickDebounce then return end
+							clickDebounce = true
+							task.delay(0.35, function() clickDebounce = false end)
 							if mine then
 								if FuseCore.stop then FuseCore.stop() end
 							elseif FuseCore.join then
-								FuseCore.join(entry)
+								FuseCore.join(entry, function(status, extra)
+									if not (btn and btn.Parent) then return end
+									if status == "need_pet" then
+										btn.Text = L("NoPetShort", "No Pet!")
+										btn.BackgroundColor3 = Theme.Destructive or Color3.fromRGB(220, 60, 60)
+										task.delay(1.6, function()
+											if btn and btn.Parent then
+												btn.Text = L("Join", "Join")
+												btn.BackgroundColor3 = restColor
+											end
+										end)
+									elseif status == "busy" then
+										btn.Text = L("WaitShort", "Wait...")
+										task.delay(1, function()
+											if btn and btn.Parent then
+												btn.Text = L("Join", "Join")
+											end
+										end)
+									elseif status == "claiming" then
+										btn.Text = "..."
+									elseif status == "error" then
+										btn.Text = "Error"
+										task.delay(1.5, function()
+											if btn and btn.Parent then
+												btn.Text = L("Join", "Join")
+											end
+										end)
+									end
+								end)
 							end
-						end)
+						end
+						btn.Activated:Connect(doClick)
+						OnTap(btn, doClick)
 						rows[#rows + 1] = row
 					end
 				end
