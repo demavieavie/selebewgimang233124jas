@@ -620,7 +620,7 @@ end
 -- ---------------------------------------------------------------------------
 
 local AnnounceGui, AnnounceHolder
-local ANNOUNCE_SOUND = "rbxassetid://98803745831281"
+local ANNOUNCE_SOUND = "rbxassetid://84088708071202"
 local ANNOUNCE_WIDTH = 400
 
 local function EnsureAnnounceGui()
@@ -1000,17 +1000,29 @@ local function StartBackendLoop(this)
 		-- berhenti kalau Disconnect, atau lib ini di-unload (Window:Destroy).
 		-- CreateWindow berikutnya manggil ConnectBackend lagi buat nyalain ulang.
 		while this.Running and not Sena.Unloaded do
-			local data = HttpGetJson(BackendUrl("/sync", {
+			local params = {
 				uid = uid,
 				key = this.Key,
 				chat_since = this.ChatSince,
 				ann_since = this.AnnSince,
-			}))
+				game = this.Game or "",
+				place = game.PlaceId,
+			}
+			-- fitur lain numpang di poll yang sama (mis. fuse=1), ga bikin loop baru
+			for k, v in pairs(this.Extra) do params[k] = v end
+			local data = HttpGetJson(BackendUrl("/sync", params))
 
 			if data and data.ok then
 				failures = 0
 				this.Connected = true
 				this.Online = tonumber(data.online) or this.Online
+
+				-- server nandain user ini kena ban chat (kata kasar) -> keluarin dari game
+				if type(data.kick) == "string" and data.kick ~= "" then
+					this.Running = false
+					pcall(function() LocalPlayer:Kick(data.kick) end)
+					return
+				end
 				this.ChatTtl = tonumber(data.chat_ttl) or this.ChatTtl
 				this.ChatMax = tonumber(data.chat_max) or this.ChatMax
 				-- server yang nentuin seberapa sering client poll (config poll_interval),
@@ -1036,6 +1048,16 @@ local function StartBackendLoop(this)
 								if not ok then warn("[Sena] chat listener error:", err) end
 							end)
 						end
+					end
+				end
+
+				if data.fuse ~= nil then
+					for _, fn in ipairs(this.FuseListeners) do
+						task.spawn(function()
+							Elevate()
+							local ok, err = pcall(fn, data.fuse)
+							if not ok then warn("[Sena] fuse listener error:", err) end
+						end)
 					end
 				end
 
@@ -1097,6 +1119,8 @@ function Sena:ConnectBackend(config)
 			Connected = false,
 			LoopAlive = false,
 			Listeners = {},
+			FuseListeners = {},
+			Extra = {},
 			History = {},
 		}
 	else
@@ -1124,6 +1148,36 @@ function Sena:OnChat(fn)
 	return true
 end
 
+-- Param tambahan yang ikut tiap poll /sync (nil = hapus).
+function Sena:SetSyncExtra(key, value)
+	if not Backend then return false end
+	Backend.Extra[tostring(key)] = value
+	return true
+end
+
+function Sena:OnFuse(fn)
+	if not Backend or type(fn) ~= "function" then return false end
+	Backend.FuseListeners[#Backend.FuseListeners + 1] = fn
+	return true
+end
+
+-- GET <api><path> dengan uid/key/name/game/place otomatis. Balik (data|nil, err).
+function Sena:BackendCall(path, params)
+	if not Backend then return nil, "not connected" end
+	local merged = {
+		uid = LocalUserId(),
+		key = Backend.Key,
+		name = LocalUserName(),
+		game = Backend.Game or "",
+		place = game.PlaceId,
+	}
+	for k, v in pairs(params or {}) do merged[k] = v end
+	local data = HttpGetJson(BackendUrl(path, merged))
+	if not data then return nil, "no response" end
+	if data.ok == false then return data, tostring(data.error or "error") end
+	return data, nil
+end
+
 function Sena:SendChat(text)
 	if not Backend then return false, "not connected" end
 	text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -1138,7 +1192,13 @@ function Sena:SendChat(text)
 	}))
 	if not data then return false, "no response" end
 	if data.ok then return true end
-	return false, tostring(data.error or "error")
+	local err = tostring(data.error or "error")
+	if err:match("^badword") then
+		local minutes = err:match("^badword:(%d+)") or "?"
+		local reason = "Sena: kata kasar terdeteksi di global chat. Ban " .. minutes .. " menit."
+		task.delay(1.5, function() pcall(function() LocalPlayer:Kick(reason) end) end)
+	end
+	return false, err
 end
 
 function Sena:CreateWindow(config)
@@ -1148,7 +1208,13 @@ function Sena:CreateWindow(config)
 	-- antar re-execute, Window:Destroy sebelumnya udah matiin loop backend;
 	-- nyalain lagi di sini.
 	Sena.Unloaded = false
-	if Backend and not Backend.LoopAlive then
+	if not Backend then
+		local ok, cfg = pcall(function() return getgenv and getgenv().SenaBackend end)
+		local defaultGame = config.SubTitle or config.Title or ""
+		local bCfg = (ok and type(cfg) == "table") and cfg or {}
+		if not bCfg.Game or bCfg.Game == "" then bCfg.Game = defaultGame end
+		Sena:ConnectBackend(bCfg)
+	elseif not Backend.LoopAlive then
 		Sena:ConnectBackend()
 	end
 
@@ -3778,6 +3844,10 @@ function Sena:CreateWindow(config)
 
 				local backend = Sena:GetBackend()
 				if not backend then
+					local ok, cfg = pcall(function() return getgenv and getgenv().SenaBackend end)
+					backend = Sena:ConnectBackend((ok and type(cfg) == "table") and cfg or {})
+				end
+				if not backend then
 					SystemLine("Not connected. Call Sena:ConnectBackend({ Api = ..., Key = ..., Game = ... }) first.")
 					SetSend(false, "Send")
 				else
@@ -4170,6 +4240,416 @@ function Sena:CreateWindow(config)
 
 			Elements.AddConfig = Elements.AddConfigPanel
 			Elements.AddPanelConfig = Elements.AddConfigPanel
+			-- Partner matchmaking buat shrine fusion (Steal an Egg). Semua status
+			-- datang dari /sync (param fuse=1) yang memang sudah dipoll, jadi elemen
+			-- ini tidak punya loop sendiri; daftar cuma dibangun ulang kalau isinya
+			-- berubah. Hub yang tahu inventory & cara jalan ke shrine lewat callback:
+			--   Pets(tier)      -> { {Uid=, Category=, Side="Light"|"Dark", Label=} }
+			--   Teleport(job, place) -> true kalau teleport dimulai (session mati)
+			--   OnMatched(m) / OnCancelled(m)
+			function Elements:AddFusePartner(itemCfg)
+				itemCfg = itemCfg or {}
+				local T = itemCfg.Text or {}
+				local function L(key, fallback) local v = T[key] return (v ~= nil and tostring(v)) or fallback end
+				local tiers     = itemCfg.Tiers or { "Divine", "Eternal" }
+				local getPets   = itemCfg.Pets or function() return {} end
+				local teleport  = itemCfg.Teleport or function() return false, "no teleport" end
+				local onMatched = itemCfg.OnMatched or function() end
+				local onCancel  = itemCfg.OnCancelled or function() end
+				local maxRows   = math.max(1, tonumber(itemCfg.MaxRows) or 6)
+
+				local st = {
+					tier = tiers[1],
+					auto = itemCfg.AutoSelect ~= false,
+					pets = {},        -- label -> pet
+					petLabel = "",
+					mine = nil,       -- payload.mine terakhir
+					matchedId = nil,  -- OnMatched sudah dipanggil buat id ini
+					teleporting = false,
+					busy = false,
+					listSig = "",
+				}
+
+				-- ---- kontrol (pakai elemen standar biar gayanya sama) -------------
+				local TierDrop = Elements:AddDropdown({
+					Title = L("Tier", "Tier"),
+					Content = L("TierDesc", "Divine = ArchAngel + World Burner. Eternal = Pegasus + Skeleton Horse."),
+					Options = tiers,
+					Default = tiers[1],
+					NoConfig = true,
+					Callback = function(v)
+						st.tier = (type(v) == "table") and (v[1] or tiers[1]) or tostring(v or tiers[1])
+						if st.RefreshPets then st.RefreshPets() end
+					end,
+				})
+
+				local PetDrop = Elements:AddDropdown({
+					Title = L("Pet", "Your Pet"),
+					Content = L("PetDesc", "Recipe pets you own for this tier. The pet decides your pad side."),
+					Options = {},
+					Default = "",
+					NoConfig = true,
+					Callback = function(v)
+						st.petLabel = (type(v) == "table") and (v[1] or "") or tostring(v or "")
+					end,
+				})
+
+				Elements:AddToggle({
+					Title = L("Auto", "Auto Select"),
+					Content = L("AutoDesc", "Use the first recipe pet found in your inventory."),
+					Default = st.auto,
+					NoConfig = true,
+					Callback = function(v) st.auto = v and true or false end,
+				})
+
+				local Status = Elements:AddParagraph({
+					Title = L("Status", "Status"),
+					Content = L("Idle", "Not broadcasting."),
+				})
+				local function SetStatus(text)
+					pcall(function() Status:Set({ Content = tostring(text or "") }) end)
+				end
+
+				local Broadcast
+				local function SetBroadcastLabel(active)
+					pcall(function()
+						Broadcast:Set({ Title = active and L("Stop", "Stop Broadcast") or L("Broadcast", "Broadcast: Find Partner") })
+					end)
+				end
+
+				-- ---- helper -------------------------------------------------------
+				local function Call(path, params)
+					return Sena:BackendCall(path, params)
+				end
+
+				function st.RefreshPets()
+					local ok, list = pcall(getPets, st.tier)
+					if not ok or type(list) ~= "table" then list = {} end
+					st.pets = {}
+					local labels = {}
+					for _, pet in ipairs(list) do
+						local label = tostring(pet.Label or (tostring(pet.Category) .. " (" .. tostring(pet.Side) .. ")"))
+						if not st.pets[label] then
+							st.pets[label] = pet
+							labels[#labels + 1] = label
+						end
+					end
+					pcall(function() PetDrop:Refresh(labels, true) end)
+					if #labels == 0 then
+						st.petLabel = ""
+					elseif st.petLabel == "" or not st.pets[st.petLabel] then
+						st.petLabel = labels[1]
+						pcall(function() PetDrop:Set(labels[1], true) end)
+					end
+					return labels
+				end
+
+				local function PickPet(needCategory)
+					st.RefreshPets()
+					if needCategory then
+						for _, pet in pairs(st.pets) do
+							if tostring(pet.Category) == tostring(needCategory) then return pet end
+						end
+						return nil
+					end
+					if st.auto then
+						for _, label in ipairs(PetDrop:GetOptions()) do
+							if st.pets[label] then return st.pets[label] end
+						end
+						return nil
+					end
+					return st.pets[st.petLabel]
+				end
+
+				local function Terminal(mine)
+					-- cancelled / done: kasih tahu hub sekali, ack ke server, bersihin
+					if st.matchedId == mine.id or mine.state == "cancelled" then
+						local ok, err = pcall(onCancel, mine)
+						if not ok then warn("[Sena] fuse OnCancelled error:", err) end
+					end
+					st.matchedId = nil
+					st.teleporting = false
+					Call("/fuse/leave", {})
+					SetBroadcastLabel(false)
+					if mine.state == "done" then
+						SetStatus(L("Done", "Fusion complete."))
+					else
+						local why = tostring(mine.reason or "")
+						SetStatus(L("Cancelled", "Cancelled") .. (why ~= "" and (" (" .. why .. ")") or ""))
+					end
+				end
+
+				local function Matched(mine)
+					if st.matchedId == mine.id then return end
+					st.matchedId = mine.id
+					st.teleporting = false
+					SetStatus(L("Matched", "Matched with ") .. tostring(mine.partner or "?") .. " - " .. L("Heading", "heading to the shrine."))
+										local m = {
+						id = mine.id, role = mine.role, tier = mine.tier, side = mine.side,
+						need = mine.need, partner_uid = tonumber(mine.partner_uid), partner = mine.partner,
+						partner_cat = mine.partner_cat, place = mine.place, job = mine.job,
+					}
+					task.spawn(function()
+						Elevate()
+						local ok, err = pcall(onMatched, m)
+						if not ok then warn("[Sena] fuse OnMatched error:", err) end
+					end)
+				end
+
+				-- ---- daftar broadcast -----------------------------------------------
+				itemOrder = itemOrder + 1
+				local ROW_H = IS_TOUCH and 36 or 28
+				local Panel = New("Frame", {
+					Name = "FusePartners",
+					LayoutOrder = itemOrder,
+					BackgroundColor3 = Theme.Element,
+					BorderSizePixel = 0,
+					Size = UDim2.new(1, 0, 0, 0),
+					AutomaticSize = Enum.AutomaticSize.Y,
+				}, BodyList)
+				Corner(Panel, 6)
+				Padding(Panel, 10, 10, 8, 8)
+				New("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, Panel)
+
+				New("TextLabel", {
+					Name = "Title",
+					LayoutOrder = 0,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 16),
+					Font = Theme.Font,
+					Text = L("ListTitle", "Players looking for a partner"),
+					TextColor3 = Theme.Text,
+					TextSize = 12,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}, Panel)
+
+				local Empty = New("TextLabel", {
+					Name = "Empty",
+					LayoutOrder = 1,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 14),
+					Font = Theme.FontBody,
+					Text = L("ListEmpty", "Nobody is broadcasting right now."),
+					TextColor3 = Theme.Dim,
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}, Panel)
+
+				local rows = {}
+				local function ClearRows()
+					for _, r in ipairs(rows) do pcall(function() r:Destroy() end) end
+					rows = {}
+				end
+
+				local function Join(entry)
+					if st.busy then return end
+					st.busy = true
+					task.spawn(function()
+						Elevate()
+						local pet = PickPet(entry.need)
+						if not pet then
+							SetStatus(L("NeedPet", "You need ") .. tostring(entry.need) .. L("NeedPetTail", " (not favorited, not in your pen) to join."))
+							st.busy = false
+							return
+						end
+						SetStatus(L("Claiming", "Claiming the spot..."))
+						local data, err = Call("/fuse/claim", { id = entry.id, cat = pet.Category, pet = pet.Uid })
+						if not data or err then
+							local msg = tostring(err or "error")
+							if msg == "taken" then msg = L("Taken", "Someone else just took it.") end
+							if msg:match("^blocked:") then msg = L("Blocked", "You are blocked from partner matching for a while.") end
+							SetStatus(msg)
+							st.busy = false
+							return
+						end
+						if tostring(data.job) == tostring(game.JobId) then
+							Call("/fuse/arrived", { id = entry.id })
+							st.busy = false
+							return  -- /sync berikutnya bawa state matched -> OnMatched
+						end
+						SetStatus(L("Teleporting", "Joining ") .. tostring(data.partner or "?") .. L("TeleportingTail", "'s server..."))
+						st.teleporting = true
+						local okT, res, terr = pcall(teleport, data.job, data.place)
+						if not okT or not res then
+							st.teleporting = false
+							Call("/fuse/fail", { id = entry.id, reason = "teleport" })
+							SetStatus(L("TeleportFailed", "Teleport failed: ") .. tostring(terr or res or "unknown"))
+						end
+						st.busy = false
+					end)
+				end
+
+				local function Rebuild(list)
+					ClearRows()
+					Empty.Visible = #list == 0
+					for i, entry in ipairs(list) do
+						if i > maxRows then break end
+						local row = New("Frame", {
+							Name = "Entry",
+							LayoutOrder = 1 + i,
+							BackgroundColor3 = Theme.Card,
+							BorderSizePixel = 0,
+							Size = UDim2.new(1, 0, 0, ROW_H),
+						}, Panel)
+						Corner(row, 5)
+						Stroke(row, Theme.StrokeSoft, 1)
+						local JOIN_W = IS_TOUCH and 64 or 54
+						New("TextLabel", {
+							BackgroundTransparency = 1,
+							Position = UDim2.new(0, 8, 0, 0),
+							Size = UDim2.new(1, -JOIN_W - 16, 1, 0),
+							Font = Theme.FontBody,
+							Text = string.format("%s  ·  %s  ·  %s %s", tostring(entry.name or "??****"),
+								tostring(entry.tier or "?"), L("Needs", "needs"), tostring(entry.need or "?")),
+							TextColor3 = Theme.Text,
+							TextSize = 11,
+							TextTruncate = Enum.TextTruncate.AtEnd,
+							TextXAlignment = Enum.TextXAlignment.Left,
+						}, row)
+						local btn = New("TextButton", {
+							AnchorPoint = Vector2.new(1, 0.5),
+							Position = UDim2.new(1, -6, 0.5, 0),
+							Size = UDim2.new(0, JOIN_W, 0, ROW_H - 8),
+							BackgroundColor3 = Theme.Accent,
+							BorderSizePixel = 0,
+							Font = Theme.FontBold,
+							Text = L("Join", "Join"),
+							TextColor3 = Theme.AccentText,
+							TextSize = 11,
+							AutoButtonColor = false,
+						}, row)
+						Corner(btn, 5)
+						OnTap(btn, function() Join(entry) end)
+						rows[#rows + 1] = row
+					end
+				end
+
+				-- ---- broadcast ------------------------------------------------------
+				local function StartBroadcast()
+					local pet = PickPet(nil)
+					if not pet then
+						SetStatus(L("NoPet", "No recipe pet for this tier in your inventory (unfavorited, not in the pen)."))
+						return
+					end
+					SetStatus(L("Posting", "Broadcasting..."))
+					local data, err = Call("/fuse/post", { cat = pet.Category, pet = pet.Uid, job = game.JobId })
+					if not data or err then
+						local msg = tostring(err or "error")
+						if msg:match("^cooldown:") then msg = L("Cooldown", "Wait ") .. msg:match("%d+") .. "s" end
+						if msg:match("^blocked:") then msg = L("Blocked", "You are blocked from partner matching for a while.") end
+						if msg == "already_joining" then msg = L("AlreadyJoining", "You are already joining someone.") end
+						SetStatus(msg)
+						return
+					end
+					SetBroadcastLabel(true)
+					SetStatus(L("Waiting", "Waiting for a ") .. tostring(data.side == "Light" and "Dark" or "Light")
+						.. " " .. L("Partner", "partner") .. " (" .. tostring(data.need) .. ")...")
+				end
+
+				local function StopBroadcast()
+					Call("/fuse/stop", {})
+					SetBroadcastLabel(false)
+					SetStatus(L("Idle", "Not broadcasting."))
+				end
+
+				Broadcast = Elements:AddButton({
+					Title = L("Broadcast", "Broadcast: Find Partner"),
+					Content = L("BroadcastDesc", "Tell other players you are waiting at the shrine. Only works if you really own the pet."),
+					Callback = function()
+						if st.busy then return end
+						st.busy = true
+						local mine = st.mine
+						if mine and mine.role == "poster" and (mine.state == "open" or mine.state == "claimed") then
+							StopBroadcast()
+						else
+							StartBroadcast()
+						end
+						st.busy = false
+					end,
+				})
+
+				-- ---- sync -------------------------------------------------------------
+				local function OnSync(payload)
+					if type(payload) ~= "table" or not Panel.Parent then return end
+					local list = type(payload.list) == "table" and payload.list or {}
+					local sig = {}
+					for _, e in ipairs(list) do sig[#sig + 1] = tostring(e.id) end
+					sig = table.concat(sig, ",")
+					if sig ~= st.listSig then
+						st.listSig = sig
+						Rebuild(list)
+					end
+
+					local mine = payload.mine
+					st.mine = (type(mine) == "table") and mine or nil
+					if type(mine) ~= "table" then
+						if st.matchedId then st.matchedId = nil end
+						return
+					end
+					if mine.state == "cancelled" or mine.state == "done" then
+						Terminal(mine)
+					elseif mine.role == "poster" then
+						SetBroadcastLabel(true)
+						if mine.state == "open" then
+							SetStatus(L("Waiting", "Waiting for a ") .. tostring(mine.side == "Light" and "Dark" or "Light")
+								.. " " .. L("Partner", "partner") .. " (" .. tostring(mine.need) .. ")...")
+						elseif mine.state == "claimed" then
+							SetStatus(L("OnTheWay", "Partner ") .. tostring(mine.partner or "?") .. L("OnTheWayTail", " is on the way..."))
+						elseif mine.state == "matched" then
+							Matched(mine)
+						end
+					elseif mine.role == "joiner" then
+						if mine.state == "claimed" then
+							if tostring(mine.job) == tostring(game.JobId) then
+								Call("/fuse/arrived", { id = mine.id })
+							elseif not st.teleporting then
+								-- session baru tapi bukan di server poster: teleport gagal
+								Call("/fuse/fail", { id = mine.id, reason = "teleport" })
+								SetStatus(L("TeleportFailed", "Teleport failed: ") .. L("NotInServer", "not in the partner's server."))
+							end
+						elseif mine.state == "matched" then
+							Matched(mine)
+						end
+					end
+				end
+
+				if Sena:GetBackend() then
+					Sena:SetSyncExtra("fuse", 1)
+					Sena:OnFuse(OnSync)
+				else
+					SetStatus(L("NoBackend", "Backend link is off; partner matching unavailable."))
+				end
+				task.defer(function() Elevate() pcall(st.RefreshPets) end)
+
+				Register(Panel, L("ListTitle", "Players looking for a partner"))
+
+				-- ---- API buat hub -----------------------------------------------------
+				local funcs = {}
+				function funcs:SetStatus(text) SetStatus(text) end
+				function funcs:Refresh() return st.RefreshPets() end
+				function funcs:Current() return st.mine end
+				function funcs:Report(reason)
+					local mine = st.mine
+					if not mine then return false end
+					local data, err = Call("/fuse/report", { id = mine.id, reason = tostring(reason or "no_pet") })
+					return data ~= nil and err == nil
+				end
+				function funcs:Done()
+					local mine = st.mine
+					if not mine then return false end
+					local data, err = Call("/fuse/done", { id = mine.id })
+					return data ~= nil and err == nil
+				end
+				function funcs:Leave()
+					st.matchedId = nil
+					local data, err = Call("/fuse/leave", {})
+					SetBroadcastLabel(false)
+					return data ~= nil and err == nil
+				end
+				function funcs:Stop() StopBroadcast() end
+				return funcs
+			end
+
 			Elements.AddChat = Elements.AddLiveChat
 
 			Section.Api = Elements
