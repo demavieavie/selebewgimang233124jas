@@ -632,6 +632,178 @@ function Sena:Notify(config)
 	return { Close = close }
 end
 
+-- Notification-style card with an avatar and two buttons (Accept / Decline).
+-- Used for "X requests to join your server"; resolves the callback once.
+--   Sena:Prompt({ Title, Content, Avatar = <userId>, Accept = "Accept",
+--                 Decline = "Decline", Duration = 60, Callback = function(accepted) end })
+function Sena:Prompt(config)
+	config = config or {}
+	local title    = tostring(config.Title or "Sena")
+	local content  = tostring(config.Content or "")
+	local duration = math.max(5, tonumber(config.Duration) or 60)
+	local avatar   = config.Avatar
+	local callback = config.Callback
+	local acceptLabel  = tostring(config.Accept or "Accept")
+	local declineLabel = tostring(config.Decline or "Decline")
+
+	EnsureNotifyGui()
+
+	local AV = 34
+	local textLeft = avatar and (12 + AV + 10) or 14
+	local descLines = content ~= "" and CountLines(content, 270 - textLeft - 12, Theme.FontBody, 12, 4) or 0
+	local BTN_H = 26
+	local height = 12 + 16 + (descLines > 0 and (descLines * DESC_LINE + 4) or 0) + 8 + BTN_H + 10
+
+	local slot = New("Frame", {
+		Name = "Slot",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, height),
+		ClipsDescendants = false,
+	}, NotifyHolder)
+
+	local card = New("Frame", {
+		Name = "Prompt",
+		BackgroundColor3 = Theme.Card,
+		BorderSizePixel = 0,
+		Size = UDim2.new(1, 0, 1, 0),
+		Position = UDim2.new(1, 20, 0, 0),
+		BackgroundTransparency = 1,
+	}, slot)
+	Corner(card, 8)
+	local cardStroke = Stroke(card, Theme.Stroke, 1, 1)
+
+	local pic
+	if avatar then
+		local ring = New("Frame", {
+			BackgroundColor3 = Theme.Element,
+			BorderSizePixel = 0,
+			Position = UDim2.new(0, 12, 0, 12),
+			Size = UDim2.new(0, AV, 0, AV),
+		}, card)
+		Corner(ring, AV / 2)
+		pic = New("ImageLabel", {
+			BackgroundTransparency = 1,
+			Size = UDim2.new(1, 0, 1, 0),
+			Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(avatar) .. "&w=60&h=60",
+			ImageTransparency = 1,
+		}, ring)
+		Corner(pic, AV / 2)
+	end
+
+	local titleLabel = New("TextLabel", {
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, textLeft, 0, 12),
+		Size = UDim2.new(1, -textLeft - 12, 0, 16),
+		Font = Theme.FontBold,
+		RichText = true,
+		Text = title,
+		TextColor3 = Theme.Text,
+		TextSize = 13,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		TextTransparency = 1,
+	}, card)
+	local descLabel
+	if content ~= "" then
+		descLabel = New("TextLabel", {
+			BackgroundTransparency = 1,
+			Position = UDim2.new(0, textLeft, 0, 29),
+			Size = UDim2.new(1, -textLeft - 12, 0, descLines * DESC_LINE),
+			Font = Theme.FontBody,
+			Text = content,
+			TextColor3 = Theme.SubText,
+			TextSize = 12,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Top,
+			TextWrapped = true,
+			TextTransparency = 1,
+		}, card)
+	end
+
+	local btnTop = height - 10 - BTN_H
+	local function makeButton(label, x, w, accent)
+		local b = New("TextButton", {
+			Active = true,
+			Position = UDim2.new(0, x, 0, btnTop),
+			Size = UDim2.new(0, w, 0, BTN_H),
+			BackgroundColor3 = accent and Theme.Accent or Theme.Element,
+			BorderSizePixel = 0,
+			Font = Theme.FontBold,
+			Text = label,
+			TextColor3 = accent and Theme.AccentText or Theme.Text,
+			TextSize = 12,
+			AutoButtonColor = false,
+			BackgroundTransparency = 1,
+			TextTransparency = 1,
+		}, card)
+		Corner(b, 7)
+		if not accent then Stroke(b, Theme.StrokeSoft, 1) end
+		return b
+	end
+	local half = math.floor((270 - textLeft - 12 - 6) / 2)
+	local acceptBtn  = makeButton(acceptLabel, textLeft, half, true)
+	local declineBtn = makeButton(declineLabel, textLeft + half + 6, half, false)
+
+	local bar = New("Frame", {
+		BackgroundColor3 = Theme.Accent,
+		BorderSizePixel = 0,
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 0, 1, 0),
+		Size = UDim2.new(1, 0, 0, 2),
+		BackgroundTransparency = 0.35,
+	}, card)
+	Corner(bar, 2)
+
+	local POP = TweenInfo.new(0.38, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+	Tween(card, POP, { Position = UDim2.new(0, 0, 0, 0) })
+	Tween(card, SMOOTH, { BackgroundTransparency = 0 })
+	Tween(cardStroke, SMOOTH, { Transparency = 0 })
+	Tween(titleLabel, SMOOTH, { TextTransparency = 0 })
+	if descLabel then Tween(descLabel, SMOOTH, { TextTransparency = 0 }) end
+	if pic then Tween(pic, SMOOTH, { ImageTransparency = 0 }) end
+	for _, b in ipairs({ acceptBtn, declineBtn }) do
+		Tween(b, SMOOTH, { BackgroundTransparency = 0, TextTransparency = 0 })
+	end
+	Tween(bar, TweenInfo.new(duration, Enum.EasingStyle.Linear), { Size = UDim2.new(0, 0, 0, 2) })
+
+	local closed = false
+	local function close()
+		Elevate()
+		if closed then return end
+		closed = true
+		Tween(card, QUICK, { Position = UDim2.new(1, 20, 0, 0), BackgroundTransparency = 1 })
+		Tween(cardStroke, QUICK, { Transparency = 1 })
+		Tween(titleLabel, QUICK, { TextTransparency = 1 })
+		if descLabel then Tween(descLabel, QUICK, { TextTransparency = 1 }) end
+		if pic then Tween(pic, QUICK, { ImageTransparency = 1 }) end
+		task.delay(0.2, function() Elevate() pcall(function() slot:Destroy() end) end)
+	end
+	local answered = false
+	local function answer(accepted)
+		Elevate()
+		if answered then return end
+		answered = true
+		close()
+		if type(callback) == "function" then
+			task.spawn(function()
+				Elevate()
+				local ok, err = pcall(callback, accepted)
+				if not ok then warn("[Sena] Prompt callback error:", err) end
+			end)
+		end
+	end
+	OnTap(acceptBtn, function() answer(true) end)
+	OnTap(declineBtn, function() answer(false) end)
+	for _, b in ipairs({ acceptBtn, declineBtn }) do
+		local rest = b == acceptBtn and Theme.Accent or Theme.Element
+		b.MouseEnter:Connect(function() Elevate() Tween(b, QUICK, { BackgroundColor3 = b == acceptBtn and Color3.fromRGB(255, 255, 255) or Theme.ElementHover }) end)
+		b.MouseLeave:Connect(function() Elevate() Tween(b, QUICK, { BackgroundColor3 = rest }) end)
+	end
+
+	task.delay(duration, function() if not answered then answer(nil) end end)
+	return { Close = close, Answer = answer }
+end
+
 -- ---------------------------------------------------------------------------
 -- Announcement popup (top-center) + backend link (live chat / announcements)
 -- ---------------------------------------------------------------------------
@@ -1010,6 +1182,59 @@ local function DetectGameName()
 	return "PlaceId " .. tostring(game.PlaceId)
 end
 
+-- One join request row from /sync. Incoming + pending -> Accept/Decline card
+-- (once per id); my own request -> teleport on accept, notify otherwise.
+local function HandleJoinUpdate(this, req)
+	local id = tostring(req.id or "")
+	if id == "" then return end
+	this.JoinSeen = this.JoinSeen or {}
+	local status = tostring(req.status or "")
+	local key = id .. ":" .. status
+	if this.JoinSeen[key] then return end
+	this.JoinSeen[key] = true
+	for _, fn in ipairs(this.JoinListeners) do
+		task.spawn(function() Elevate() pcall(fn, req) end)
+	end
+	if req.incoming then
+		if status ~= "pending" then return end
+		if (os.time() - (tonumber(req.ts) or 0)) > 110 then return end
+		Sena:Prompt({
+			Title = tostring(req.name or "Someone"),
+			Content = "wants to join your server (" .. tostring(req.game or "?") .. ")",
+			Avatar = tostring(req.av or ""):match("^%d+$") and req.av or nil,
+			Accept = "Accept",
+			Decline = "Decline",
+			Duration = 60,
+			Callback = function(accepted)
+				if accepted == nil then return end
+				local ok, err = Sena:AnswerJoin(id, accepted == true)
+				if not ok then
+					Sena:Notify({ Title = "Request join", Content = "Could not answer: " .. tostring(err), Duration = 4 })
+				elseif accepted then
+					Sena:Notify({ Title = "Request join", Content = tostring(req.name or "They") .. " is on the way to your server.", Duration = 4 })
+				end
+			end,
+		})
+	else
+		if status == "accepted" then
+			local place = tonumber(req.place)
+			local job = tostring(req.job or "")
+			if place and job ~= "" then
+				Sena:Notify({ Title = "Request join", Content = tostring(req.to_name or "They") .. " accepted. Joining their server...", Duration = 5 })
+				task.delay(1.2, function()
+					pcall(function()
+						game:GetService("TeleportService"):TeleportToPlaceInstance(place, job, LocalPlayer)
+					end)
+				end)
+			end
+		elseif status == "declined" then
+			Sena:Notify({ Title = "Request join", Content = tostring(req.to_name or "They") .. " declined.", Duration = 4 })
+		elseif status == "expired" then
+			Sena:Notify({ Title = "Request join", Content = tostring(req.to_name or "They") .. " did not answer.", Duration = 4 })
+		end
+	end
+end
+
 local function StartBackendLoop(this)
 	if this.LoopAlive then return end
 	this.LoopAlive = true
@@ -1025,8 +1250,11 @@ local function StartBackendLoop(this)
 			local params = {
 				uid = uid,
 				key = this.Key,
+				name = LocalUserName(),
 				chat_since = this.ChatSince,
 				ann_since = this.AnnSince,
+				dm_since = this.DmSince,
+				join_since = this.JoinSince,
 				game = this.Game or "",
 				place = game.PlaceId,
 			}
@@ -1071,6 +1299,41 @@ local function StartBackendLoop(this)
 							end)
 						end
 					end
+				end
+
+				-- private messages: only rows addressed to / sent by this uid arrive
+				if type(data.dm) == "table" then
+					for _, msg in ipairs(data.dm) do
+						local id = tonumber(msg.id) or 0
+						if id > this.DmSince then this.DmSince = id end
+						msg.pm = true
+						this.DmHistory[#this.DmHistory + 1] = msg
+						if #this.DmHistory > 60 then table.remove(this.DmHistory, 1) end
+						for _, fn in ipairs(this.DmListeners) do
+							task.spawn(function()
+								Elevate()
+								local ok, err = pcall(fn, msg)
+								if not ok then warn("[Sena] dm listener error:", err) end
+							end)
+						end
+					end
+				elseif tonumber(data.dm_seq) and this.DmSince == 0 then
+					this.DmSince = tonumber(data.dm_seq)
+				end
+
+				-- join requests: incoming pending -> prompt, outgoing answered -> teleport
+				if type(data.joins) == "table" then
+					for _, req in ipairs(data.joins) do
+						local ver = tonumber(req.ver) or 0
+						if ver > this.JoinSince then this.JoinSince = ver end
+						task.spawn(function()
+							Elevate()
+							local ok, err = pcall(HandleJoinUpdate, this, req)
+							if not ok then warn("[Sena] join handler error:", err) end
+						end)
+					end
+				elseif tonumber(data.join_seq) and this.JoinSince == 0 then
+					this.JoinSince = tonumber(data.join_seq)
 				end
 
 				if data.fuse ~= nil then
@@ -1142,6 +1405,11 @@ function Sena:ConnectBackend(config)
 			LoopAlive = false,
 			Listeners = {},
 			FuseListeners = {},
+			DmListeners = {},
+			JoinListeners = {},
+			DmSince = 0,
+			JoinSince = 0,
+			DmHistory = {},
 			Extra = {},
 			History = {},
 		}
@@ -1221,6 +1489,61 @@ function Sena:SendChat(text)
 		task.delay(1.5, function() pcall(function() LocalPlayer:Kick(reason) end) end)
 	end
 	return false, err
+end
+
+function Sena:OnDM(fn)
+	if not Backend or type(fn) ~= "function" then return false end
+	Backend.DmListeners[#Backend.DmListeners + 1] = fn
+	return true
+end
+
+function Sena:OnJoin(fn)
+	if not Backend or type(fn) ~= "function" then return false end
+	Backend.JoinListeners[#Backend.JoinListeners + 1] = fn
+	return true
+end
+
+-- Private message to a Roblox username who is online in Sena. Same cooldown
+-- and word filter as global chat; the server echoes it back with mine=true.
+function Sena:SendDM(toName, text)
+	if not Backend then return false, "not connected" end
+	toName = tostring(toName or ""):gsub("^@", "")
+	text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if toName == "" then return false, "who?" end
+	if text == "" then return false, "empty" end
+	local data, err = Sena:BackendCall("/dm/send", { to = toName, text = text })
+	if not data then return false, err end
+	if data.ok then return true, data.to_name end
+	err = tostring(data.error or "error")
+	if err:match("^badword") then
+		local minutes = err:match("^badword:(%d+)") or "?"
+		local reason = "Sena: kata kasar terdeteksi di chat. Ban " .. minutes .. " menit."
+		task.delay(1.5, function() pcall(function() LocalPlayer:Kick(reason) end) end)
+	end
+	return false, err
+end
+
+function Sena:RequestJoin(toName)
+	if not Backend then return false, "not connected" end
+	toName = tostring(toName or ""):gsub("^@", "")
+	if toName == "" then return false, "who?" end
+	local data, err = Sena:BackendCall("/join/request", { to = toName })
+	if not data then return false, err end
+	if data.ok then return true, data.to_name end
+	return false, tostring(data.error or "error")
+end
+
+function Sena:AnswerJoin(id, accept)
+	if not Backend then return false, "not connected" end
+	local data, err = Sena:BackendCall("/join/answer", {
+		id = tostring(id),
+		accept = accept and "1" or "0",
+		place = tostring(game.PlaceId),
+		job = tostring(game.JobId),
+	})
+	if not data then return false, err end
+	if data.ok then return true end
+	return false, tostring(data.error or "error")
 end
 
 function Sena:CreateWindow(config)
@@ -3636,20 +3959,41 @@ function Sena:CreateWindow(config)
 					Name = "Title",
 					BackgroundTransparency = 1,
 					Position = UDim2.new(0, 10, 0, 0),
-					Size = UDim2.new(0.6, 0, 0, HEADER_H),
+					Size = UDim2.new(0.34, 0, 0, HEADER_H),
 					Font = Theme.Font,
 					Text = cTitle,
 					TextColor3 = Theme.Text,
 					TextSize = 13,
 					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
 				}, Row)
+
+				-- Global / PM switch. PM needs a target: /pm <player> sets it.
+				local ModeBtn = New("TextButton", {
+					Name = "Mode",
+					Active = true,
+					Position = UDim2.new(0.34, 4, 0, 4),
+					Size = UDim2.new(0, 110, 0, HEADER_H - 8),
+					BackgroundColor3 = Theme.Element,
+					BorderSizePixel = 0,
+					Font = Theme.FontBold,
+					RichText = true,
+					Text = "Global",
+					TextColor3 = Theme.Text,
+					TextSize = 11,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+					AutoButtonColor = false,
+					ZIndex = 3,
+				}, Row)
+				Corner(ModeBtn, 6)
+				Stroke(ModeBtn, Theme.StrokeSoft, 1)
 
 				local OnlineLabel = New("TextLabel", {
 					Name = "Online",
 					BackgroundTransparency = 1,
 					AnchorPoint = Vector2.new(1, 0),
 					Position = UDim2.new(1, -10, 0, 0),
-					Size = UDim2.new(0.4, 0, 0, HEADER_H),
+					Size = UDim2.new(0.3, 0, 0, HEADER_H),
 					Font = Theme.FontBody,
 					RichText = true,
 					Text = "",
@@ -3891,6 +4235,14 @@ function Sena:CreateWindow(config)
 					end
 
 					local left = AVATAR + 8
+					local whoText = string.format('<font color="%s">%s</font>', mine and mineHex or Hex(tint), Escape(name))
+					if msg.pm then
+						-- private message: gold PM tag, and for my own the recipient
+						whoText = '<font color="#F5C451">PM</font>  ' .. whoText
+						if mine and msg.to_name then
+							whoText = whoText .. '  <font color="' .. dimHex .. '">to</font>  <font color="#F5C451">' .. Escape(msg.to_name) .. '</font>'
+						end
+					end
 					New("TextLabel", {
 						Name = "Who",
 						BackgroundTransparency = 1,
@@ -3898,8 +4250,8 @@ function Sena:CreateWindow(config)
 						Size = UDim2.new(1, -left, 0, 15),
 						Font = Theme.FontBold,
 						RichText = true,
-						Text = string.format('<font color="%s">%s</font>  <font color="%s" size="11">%s  ·  %s</font>',
-							mine and mineHex or Hex(tint), Escape(name), dimHex,
+						Text = string.format('%s  <font color="%s" size="11">%s  ·  %s</font>',
+							whoText, dimHex,
 							Escape(msg.game or "?"), os.date("%H:%M", ts)),
 						TextColor3 = Theme.Text,
 						TextSize = 12,
@@ -3970,11 +4322,116 @@ function Sena:CreateWindow(config)
 					end
 				end
 
+				local mode, pmTarget = "global", nil
+				local lastIncoming = nil
+				local function SetMode(m, target)
+					Elevate()
+					if m == "pm" then
+						if target and target ~= "" then pmTarget = tostring(target):gsub("^@", "") end
+						if not pmTarget then
+							SystemLine("Pick someone first: /pm <player>")
+							return
+						end
+						mode = "pm"
+						ModeBtn.Text = '<font color="#F5C451">PM</font>  ' .. Escape(pmTarget)
+						Box.PlaceholderText = "Private message to " .. pmTarget .. "..."
+					else
+						mode = "global"
+						ModeBtn.Text = "Global"
+						Box.PlaceholderText = "Type a message..."
+					end
+				end
+				local function ToggleMode()
+					if mode == "global" then SetMode("pm") else SetMode("global") end
+				end
+				OnTap(ModeBtn, ToggleMode)
+				ModeBtn.MouseEnter:Connect(function() Elevate() Tween(ModeBtn, QUICK, { BackgroundColor3 = Theme.ElementHover }) end)
+				ModeBtn.MouseLeave:Connect(function() Elevate() Tween(ModeBtn, QUICK, { BackgroundColor3 = Theme.Element }) end)
+
+				local function Help()
+					SystemLine("Commands:")
+					SystemLine("/help - this list")
+					SystemLine("/pm <player> [message] - private message (switches you to PM mode)")
+					SystemLine("/global - back to global chat")
+					SystemLine("/requestjoin <player> - ask to join their server")
+					SystemLine("/accept  /decline - answer the latest join request")
+					SystemLine("Tip: the Global / PM button at the top switches modes too. Names are Roblox usernames, they must be online in Sena.")
+				end
+
+				-- returns text to send (or nil when the command was fully handled)
+				local function RunCommand(text)
+					local cmd, rest = text:match("^/(%w+)%s*(.*)$")
+					if not cmd then return text end
+					cmd = cmd:lower()
+					if cmd == "help" or cmd == "h" or cmd == "cmd" then
+						Help()
+						return nil
+					elseif cmd == "global" or cmd == "g" or cmd == "all" then
+						SetMode("global")
+						SystemLine("Global chat")
+						return nil
+					elseif cmd == "pm" or cmd == "w" or cmd == "msg" or cmd == "dm" then
+						local who, body = rest:match("^(%S+)%s*(.*)$")
+						if not who then
+							SystemLine("Usage: /pm <player> [message]")
+							return nil
+						end
+						SetMode("pm", who)
+						if body == "" then
+							SystemLine("PM mode: everything you type now goes to " .. tostring(pmTarget))
+							return nil
+						end
+						return body
+					elseif cmd == "requestjoin" or cmd == "rj" or cmd == "join" then
+						local who = rest:match("^(%S+)")
+						if not who then
+							SystemLine("Usage: /requestjoin <player>")
+							return nil
+						end
+						task.spawn(function()
+							Elevate()
+							local ok, res = Sena:RequestJoin(who)
+							if ok then
+								SystemLine("Asked " .. tostring(res or who) .. " to join their server. Waiting for the answer...")
+							else
+								SystemLine("Request join failed: " .. tostring(res))
+							end
+						end)
+						return nil
+					elseif cmd == "accept" or cmd == "decline" or cmd == "deny" then
+						if not lastIncoming then
+							SystemLine("No join request waiting")
+							return nil
+						end
+						local id = lastIncoming
+						lastIncoming = nil
+						local accept = cmd == "accept"
+						task.spawn(function()
+							Elevate()
+							local ok, err = Sena:AnswerJoin(id, accept)
+							if ok then
+								SystemLine(accept and "Accepted, they are on the way." or "Declined.")
+							else
+								SystemLine("Could not answer: " .. tostring(err))
+							end
+						end)
+						return nil
+					end
+					SystemLine("Unknown command. /help")
+					return nil
+				end
+
 				local function Submit()
 					Elevate()
 					if sending then return end
 					local text = Box.Text:gsub("^%s+", ""):gsub("%s+$", "")
 					if text == "" then return end
+					if text:sub(1, 1) == "/" then
+						local out = RunCommand(text)
+						Box.Text = ""
+						if not out or out == "" then return end
+						text = out
+					end
 					local limit = MaxLength()
 					if #text > limit then
 						text = text:sub(1, limit)
@@ -3990,7 +4447,12 @@ function Sena:CreateWindow(config)
 					SetSend(false, "...")
 					task.spawn(function()
 						Elevate()
-						local ok, err = Sena:SendChat(text)
+						local ok, err
+						if mode == "pm" then
+							ok, err = Sena:SendDM(pmTarget, text)
+						else
+							ok, err = Sena:SendChat(text)
+						end
 						if ok then
 							lastSent = os.clock()
 							Box.Text = ""
@@ -4048,8 +4510,28 @@ function Sena:CreateWindow(config)
 					SetSend(false, "Send")
 				else
 					for _, msg in ipairs(backend.History) do Append(msg) end
+					for _, msg in ipairs(backend.DmHistory or {}) do Append(msg) end
 					Sena:OnChat(function(msg)
 						if Row.Parent then Append(msg) end
+					end)
+					Sena:OnDM(function(msg)
+						if Row.Parent then Append(msg) end
+					end)
+					Sena:OnJoin(function(req)
+						if not Row.Parent then return end
+						local status = tostring(req.status or "")
+						if req.incoming then
+							if status == "pending" then
+								lastIncoming = req.id
+								SystemLine(tostring(req.name or "Someone") .. " wants to join your server - /accept or /decline (or use the popup)")
+							end
+						elseif status == "accepted" then
+							SystemLine(tostring(req.to_name or "They") .. " accepted your request, teleporting...")
+						elseif status == "declined" then
+							SystemLine(tostring(req.to_name or "They") .. " declined your request")
+						elseif status == "expired" then
+							SystemLine(tostring(req.to_name or "They") .. " did not answer")
+						end
 					end)
 
 					task.spawn(function()
@@ -5036,6 +5518,306 @@ function Sena:CreateWindow(config)
 				local funcs = {}
 				function funcs:Clear() sig = "" Rebuild({}) end
 				return funcs
+			end
+
+			-- Generic scrolling list of rows, each with two text lines on the left,
+			-- an optional two-line status block in the middle and either an action
+			-- button or a coloured badge on the right. Rows are keyed by `id`, so
+			-- Update() only touches what changed (safe to call every second).
+			--   entry = { id, name (rich), sub, status, statusSub, button, badge,
+			--             badgeColor ("green"|"red"|"dim"|Color3), disabled, onClick(entry, setLabel) }
+			function Elements:AddActionList(itemCfg)
+				itemCfg = itemCfg or {}
+				local lTitle      = tostring(itemCfg.Title or itemCfg[1] or "")
+				local emptyText   = tostring(itemCfg.EmptyText or "Nothing here yet.")
+				local maxRows     = math.max(1, tonumber(itemCfg.MaxRows) or 40)
+				local visibleRows = math.max(1, tonumber(itemCfg.VisibleRows) or 4)
+				local btnW        = math.max(40, tonumber(itemCfg.ButtonWidth) or (IS_TOUCH and 72 or 64))
+
+				itemOrder = itemOrder + 1
+				local ROW_H  = IS_TOUCH and 50 or 42
+				local GAP    = 4
+				local TITLE  = lTitle ~= "" and 18 or 0
+				local PAD    = 8
+				local listH  = 22
+				local Panel = New("Frame", {
+					Name = "ActionList",
+					LayoutOrder = itemOrder,
+					BackgroundColor3 = Theme.Element,
+					BorderSizePixel = 0,
+					Size = UDim2.new(1, 0, 0, PAD + TITLE + (TITLE > 0 and 4 or 0) + listH + PAD),
+					ClipsDescendants = true,
+				}, BodyList)
+				Corner(Panel, 6)
+				pcall(function() Panel.AutoLocalize = false end)
+
+				if TITLE > 0 then
+					New("TextLabel", {
+						Name = "Title",
+						BackgroundTransparency = 1,
+						Position = UDim2.new(0, 10, 0, PAD),
+						Size = UDim2.new(1, -80, 0, TITLE),
+						Font = Theme.Font,
+						Text = lTitle,
+						TextColor3 = Theme.Text,
+						TextSize = 13,
+						TextXAlignment = Enum.TextXAlignment.Left,
+					}, Panel)
+				end
+				local Count = New("TextLabel", {
+					Name = "Count",
+					BackgroundTransparency = 1,
+					AnchorPoint = Vector2.new(1, 0),
+					Position = UDim2.new(1, -10, 0, PAD),
+					Size = UDim2.new(0, 60, 0, math.max(TITLE, 14)),
+					Font = Theme.FontBody,
+					Text = "",
+					TextColor3 = Theme.SubText,
+					TextSize = 12,
+					TextXAlignment = Enum.TextXAlignment.Right,
+					Visible = TITLE > 0,
+				}, Panel)
+
+				local Scroll = New("ScrollingFrame", {
+					Name = "List",
+					Position = UDim2.new(0, PAD, 0, PAD + TITLE + (TITLE > 0 and 4 or 0)),
+					Size = UDim2.new(1, -PAD * 2, 0, listH),
+					BackgroundTransparency = 1,
+					BorderSizePixel = 0,
+					ScrollBarThickness = IS_TOUCH and 6 or 3,
+					ScrollBarImageColor3 = Theme.Track,
+					ScrollingDirection = Enum.ScrollingDirection.Y,
+					CanvasSize = UDim2.new(0, 0, 0, 0),
+					AutomaticCanvasSize = Enum.AutomaticSize.Y,
+					ZIndex = 2,
+				}, Panel)
+				Padding(Scroll, 0, IS_TOUCH and 8 or 6, 0, 0)
+				New("UIListLayout", { Padding = UDim.new(0, GAP), SortOrder = Enum.SortOrder.LayoutOrder }, Scroll)
+
+				local Empty = New("TextLabel", {
+					Name = "Empty",
+					LayoutOrder = 0,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 14),
+					Font = Theme.FontBody,
+					Text = emptyText,
+					TextColor3 = Theme.Dim,
+					TextSize = 12,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					ZIndex = 3,
+				}, Scroll)
+
+				local GREEN = Color3.fromRGB(74, 222, 128)
+				local RED   = Theme.Destructive or Color3.fromRGB(220, 60, 60)
+				local function badgeColor(v)
+					if typeof(v) == "Color3" then return v end
+					if v == "green" then return GREEN end
+					if v == "red" then return RED end
+					if v == "accent" then return Theme.Accent end
+					return Theme.Track
+				end
+
+				local rows = {}      -- id -> { frame, labels..., entry }
+
+				local function BuildRow(entry, order)
+					local row = New("Frame", {
+						Name = "Entry",
+						LayoutOrder = order,
+						BackgroundColor3 = Theme.Card,
+						BorderSizePixel = 0,
+						Size = UDim2.new(1, 0, 0, ROW_H),
+						ZIndex = 3,
+					}, Scroll)
+					Corner(row, 5)
+					Stroke(row, Theme.StrokeSoft, 1)
+					local rightW = btnW + 16
+					local hasMid = (entry.status or entry.statusSub) ~= nil
+					local leftW  = hasMid and 0.46 or 1
+					local Who = New("TextLabel", {
+						Name = "Who", ZIndex = 4, BackgroundTransparency = 1,
+						Position = UDim2.new(0, 10, 0, 6),
+						Size = UDim2.new(leftW, hasMid and -10 or -rightW - 10, 0, 15),
+						Font = Theme.FontBold, RichText = true,
+						Text = tostring(entry.name or ""),
+						TextColor3 = Theme.Text, TextSize = 12,
+						TextTruncate = Enum.TextTruncate.AtEnd,
+						TextXAlignment = Enum.TextXAlignment.Left,
+					}, row)
+					local Sub = New("TextLabel", {
+						Name = "Sub", ZIndex = 4, BackgroundTransparency = 1,
+						Position = UDim2.new(0, 10, 0, 22),
+						Size = UDim2.new(leftW, hasMid and -10 or -rightW - 10, 0, 15),
+						Font = Theme.FontBody, RichText = true,
+						Text = tostring(entry.sub or ""),
+						TextColor3 = Theme.SubText, TextSize = 12,
+						TextTruncate = Enum.TextTruncate.AtEnd,
+						TextXAlignment = Enum.TextXAlignment.Left,
+					}, row)
+					local Status = New("TextLabel", {
+						Name = "Status", ZIndex = 4, BackgroundTransparency = 1,
+						Position = UDim2.new(leftW, 0, 0, 6),
+						Size = UDim2.new(1 - leftW, -rightW, 0, 15),
+						Font = Theme.FontBody, RichText = true,
+						Text = tostring(entry.status or ""),
+						TextColor3 = Theme.SubText, TextSize = 12,
+						TextTruncate = Enum.TextTruncate.AtEnd,
+						TextXAlignment = Enum.TextXAlignment.Left,
+						Visible = hasMid,
+					}, row)
+					local StatusSub = New("TextLabel", {
+						Name = "StatusSub", ZIndex = 4, BackgroundTransparency = 1,
+						Position = UDim2.new(leftW, 0, 0, 22),
+						Size = UDim2.new(1 - leftW, -rightW, 0, 15),
+						Font = Theme.FontBody, RichText = true,
+						Text = tostring(entry.statusSub or ""),
+						TextColor3 = Theme.Dim, TextSize = 11,
+						TextTruncate = Enum.TextTruncate.AtEnd,
+						TextXAlignment = Enum.TextXAlignment.Left,
+						Visible = hasMid,
+					}, row)
+
+					local btn = New("TextButton", {
+						Name = "Action", Active = true, ZIndex = 5,
+						AnchorPoint = Vector2.new(1, 0.5),
+						Position = UDim2.new(1, -6, 0.5, 0),
+						Size = UDim2.new(0, btnW, 0, ROW_H - 14),
+						BackgroundColor3 = Theme.Accent, BorderSizePixel = 0,
+						Font = Theme.FontBold, Text = "",
+						TextColor3 = Theme.AccentText, TextSize = 12,
+						AutoButtonColor = false, Visible = false,
+					}, row)
+					Corner(btn, 7)
+					local badge = New("TextLabel", {
+						Name = "Badge", ZIndex = 5, BackgroundTransparency = 1,
+						AnchorPoint = Vector2.new(1, 0.5),
+						Position = UDim2.new(1, -6, 0.5, 0),
+						Size = UDim2.new(0, btnW, 0, ROW_H - 14),
+						BackgroundColor3 = Theme.Track, BorderSizePixel = 0,
+						Font = Theme.FontBold, Text = "",
+						TextColor3 = Theme.Text, TextSize = 12, Visible = false,
+					}, row)
+					Corner(badge, 7)
+					Stroke(badge, Theme.StrokeSoft, 1)
+
+					local r = { frame = row, Who = Who, Sub = Sub, Status = Status, StatusSub = StatusSub, btn = btn, badge = badge, entry = entry, rest = Theme.Accent }
+					btn.MouseEnter:Connect(function() if r.entry.disabled then return end Elevate() Tween(btn, QUICK, { BackgroundColor3 = Color3.fromRGB(255, 255, 255) }) end)
+					btn.MouseLeave:Connect(function() Elevate() Tween(btn, QUICK, { BackgroundColor3 = r.rest }) end)
+					local clickDebounce = false
+					local function doClick()
+						if clickDebounce or r.entry.disabled then return end
+						clickDebounce = true
+						task.delay(0.35, function() clickDebounce = false end)
+						local fn = r.entry.onClick
+						if type(fn) ~= "function" then return end
+						task.spawn(function()
+							Elevate()
+							local ok, err = pcall(fn, r.entry, function(label, color)
+								if not (btn and btn.Parent) then return end
+								if label ~= nil then btn.Text = tostring(label) end
+								if color ~= nil then btn.BackgroundColor3 = badgeColor(color) end
+							end)
+							if not ok then warn("[Sena] ActionList callback error:", err) end
+						end)
+					end
+					btn.Activated:Connect(doClick)
+					OnTap(btn, doClick)
+					return r
+				end
+
+				local NARROW_W = 400
+				local function ApplyRow(r, entry, order)
+					r.entry = entry
+					r.frame.LayoutOrder = order
+					local hasMid = (entry.status or entry.statusSub) ~= nil
+					local rightW = btnW + 16
+					-- in a narrow column there is no room for a middle block: fold the
+					-- status into the two left lines instead of truncating everything
+					local narrow = hasMid and Panel.AbsoluteSize.X < NARROW_W
+					if narrow then
+						local st1 = tostring(entry.status or "")
+						local st2 = tostring(entry.statusSub or "")
+						r.Who.Text = tostring(entry.name or "") .. (st1 ~= "" and ('   <font color="#A2A2AE">·</font>  ' .. st1) or "")
+						r.Sub.Text = tostring(entry.sub or "") .. (st2 ~= "" and ('  <font color="#74747F">·</font>  ' .. st2) or "")
+						r.Who.Size = UDim2.new(1, -rightW - 10, 0, 15)
+						r.Sub.Size = UDim2.new(1, -rightW - 10, 0, 15)
+					else
+						r.Who.Text = tostring(entry.name or "")
+						r.Sub.Text = tostring(entry.sub or "")
+						local leftW = hasMid and 0.46 or 1
+						r.Who.Size = UDim2.new(leftW, hasMid and -10 or -rightW - 10, 0, 15)
+						r.Sub.Size = UDim2.new(leftW, hasMid and -10 or -rightW - 10, 0, 15)
+					end
+					r.Status.Text = tostring(entry.status or "")
+					r.StatusSub.Text = tostring(entry.statusSub or "")
+					r.Status.Visible = hasMid and not narrow
+					r.StatusSub.Visible = hasMid and not narrow
+					if entry.button then
+						r.btn.Visible = true
+						r.badge.Visible = false
+						r.btn.Text = tostring(entry.button)
+						r.rest = entry.disabled and Theme.Track or badgeColor(entry.buttonColor or "accent")
+						r.btn.BackgroundColor3 = r.rest
+						r.btn.TextColor3 = entry.disabled and Theme.Dim or ((entry.buttonColor == nil or entry.buttonColor == "accent") and Theme.AccentText or Color3.fromRGB(14, 14, 17))
+					elseif entry.badge then
+						r.btn.Visible = false
+						r.badge.Visible = true
+						r.badge.Text = tostring(entry.badge)
+						local c = badgeColor(entry.badgeColor or "dim")
+						r.badge.TextColor3 = c
+						local stroke = r.badge:FindFirstChildOfClass("UIStroke")
+						if stroke then stroke.Color = c stroke.Transparency = 0.55 end
+					else
+						r.btn.Visible = false
+						r.badge.Visible = false
+					end
+				end
+
+				Panel:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+					Elevate()
+					for _, r in pairs(rows) do pcall(ApplyRow, r, r.entry, r.frame.LayoutOrder) end
+				end)
+
+				local handle = {}
+				-- callers poll from their own threads, and a thread that yielded
+				-- through a game remote comes back with a lowered identity, so
+				-- re-assert before the first Instance read (the rows live under CoreGui)
+				function handle:Alive() Elevate() return Panel.Parent ~= nil end
+				function handle:Update(list)
+					Elevate()
+					if not Panel.Parent then return end
+					list = list or {}
+					local seen = {}
+					local n = 0
+					for i, entry in ipairs(list) do
+						if i > maxRows then break end
+						local id = tostring(entry.id or i)
+						seen[id] = true
+						n += 1
+						local r = rows[id]
+						if not r then
+							r = BuildRow(entry, i)
+							rows[id] = r
+						end
+						ApplyRow(r, entry, i)
+					end
+					for id, r in pairs(rows) do
+						if not seen[id] then
+							pcall(function() r.frame:Destroy() end)
+							rows[id] = nil
+						end
+					end
+					Empty.Visible = n == 0
+					Count.Text = n > 0 and tostring(n) or ""
+					-- grow with the rows up to VisibleRows, never leave a big empty box
+					local shownRows = math.clamp(n, 1, visibleRows)
+					local h = n == 0 and 22 or (shownRows * (ROW_H + GAP) - GAP)
+					Scroll.Size = UDim2.new(1, -PAD * 2, 0, h)
+					Panel.Size = UDim2.new(1, 0, 0, PAD + TITLE + (TITLE > 0 and 4 or 0) + h + PAD)
+				end
+				function handle:Clear() self:Update({}) end
+
+				Register(Panel, lTitle .. " " .. emptyText)
+				return handle
 			end
 
 			Elements.AddChat = Elements.AddLiveChat
