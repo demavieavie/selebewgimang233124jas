@@ -1251,6 +1251,7 @@ local function StartBackendLoop(this)
 				uid = uid,
 				key = this.Key,
 				name = LocalUserName(),
+				display = (LocalPlayer and LocalPlayer.DisplayName) or "",
 				chat_since = this.ChatSince,
 				ann_since = this.AnnSince,
 				dm_since = this.DmSince,
@@ -1458,6 +1459,7 @@ function Sena:BackendCall(path, params)
 		uid = LocalUserId(),
 		key = Backend.Key,
 		name = LocalUserName(),
+		display = (LocalPlayer and LocalPlayer.DisplayName) or "",
 		game = Backend.Game or "",
 		place = game.PlaceId,
 	}
@@ -4383,9 +4385,10 @@ function Sena:CreateWindow(config)
 						end
 						return body
 					elseif cmd == "requestjoin" or cmd == "rj" or cmd == "join" then
-						local who = rest:match("^(%S+)")
-						if not who then
-							SystemLine("Usage: /requestjoin <player>")
+						local cleanRest = rest:gsub("^[%.%s@\"']+", ""):gsub("[\"']+$", "")
+						local who = cleanRest:match("^(%S+)")
+						if not who or who == "" then
+							SystemLine("Usage: /requestjoin <player username or display name>")
 							return nil
 						end
 						task.spawn(function()
@@ -5055,16 +5058,25 @@ function Sena:CreateWindow(config)
 				end
 
 				local function Terminal(mine)
-					if st.matchedId == mine.id or mine.state == "cancelled" then
+					if st.matchedId == mine.id or mine.state == "cancelled" or mine.state == "declined" then
 						local ok, err = pcall(onCancel, mine)
 						if not ok then warn("[Sena] fuse OnCancelled error:", err) end
 					end
 					st.matchedId = nil
 					st.teleporting = false
+					st._promptKey = nil
 					Call("/fuse/leave", {})
 					SetBroadcastLabel(false)
 					if mine.state == "done" then
 						SetStatus(L("Done", "Fusion complete."))
+					elseif mine.state == "declined" then
+						local why = tostring(mine.reason or L("Declined", "Partner declined the request."))
+						SetStatus(why)
+						pcall(function()
+							if Sena and Sena.Notify then
+								Sena:Notify({ Title = L("ListTitle", "Partner Fuse"), Content = why, Duration = 5 })
+							end
+						end)
 					else
 						local why = tostring(mine.reason or "")
 						SetStatus(L("Cancelled", "Cancelled") .. (why ~= "" and (" (" .. why .. ")") or ""))
@@ -5075,6 +5087,7 @@ function Sena:CreateWindow(config)
 					if st.matchedId == mine.id then return end
 					st.matchedId = mine.id
 					st.teleporting = false
+					st._promptKey = nil
 					SetStatus(L("Matched", "Matched with ") .. tostring(mine.partner or "?") .. " - " .. L("Heading", "heading to the shrine."))
 					local m = {
 						id = mine.id, role = mine.role, tier = mine.tier, side = mine.side,
@@ -5105,12 +5118,12 @@ function Sena:CreateWindow(config)
 							local pet = PickPet(entry.need, entry.tier)
 							if not pet then
 								local needText = tostring(entry.need or "?")
-								SetStatus(L("NeedPet", "You need ") .. needText .. L("NeedPetTail", " (not favorited, not in your pen) to join."))
+								SetStatus(L("NeedPet", "You need ") .. needText .. L("NeedPetTail", " (recipe pet) to join."))
 								pcall(function()
 									if Sena and Sena.Notify then
 										Sena:Notify({
 											Title = L("ListTitle", "Partner Fuse"),
-											Content = L("NeedPet", "You need ") .. needText .. L("NeedPetTail", " (not favorited, not in your pen) to join."),
+											Content = L("NeedPet", "You need ") .. needText .. L("NeedPetTail", " (recipe pet) to join."),
 											Duration = 4,
 										})
 									end
@@ -5120,7 +5133,7 @@ function Sena:CreateWindow(config)
 								return
 							end
 							if onFeedback then onFeedback("claiming") end
-							SetStatus(L("Claiming", "Claiming the spot..."))
+							SetStatus(L("Claiming", "Requesting to join ") .. tostring(entry.name or "partner") .. "...")
 							local data, callErr = Call("/fuse/claim", { id = entry.id, cat = pet.Category, pet = pet.Uid })
 							if not data or callErr then
 								local msg = tostring(callErr or "error")
@@ -5137,19 +5150,17 @@ function Sena:CreateWindow(config)
 								st.busy = false
 								return
 							end
-							if tostring(data.job) == tostring(game.JobId) then
-								Call("/fuse/arrived", { id = entry.id })
-								st.busy = false
-								return  -- /sync berikutnya bawa state matched -> OnMatched
-							end
-							SetStatus(L("Teleporting", "Joining ") .. tostring(data.partner or "?") .. L("TeleportingTail", "'s server..."))
-							st.teleporting = true
-							local okT, res, terr = pcall(teleport, data.job, data.place)
-							if not okT or not res then
-								st.teleporting = false
-								Call("/fuse/fail", { id = entry.id, reason = "teleport" })
-								SetStatus(L("TeleportFailed", "Teleport failed: ") .. tostring(terr or res or "unknown"))
-							end
+							-- 2-way handshake: tunggu poster accept lewat prompt
+							SetStatus(L("WaitingApproval", "Request sent! Waiting for ") .. tostring(data.partner or entry.name or "partner") .. L("WaitingApprovalTail", " to accept..."))
+							pcall(function()
+								if Sena and Sena.Notify then
+									Sena:Notify({
+										Title = L("ListTitle", "Partner Fuse"),
+										Content = "Request sent to " .. tostring(data.partner or entry.name or "partner") .. "! Waiting for approval...",
+										Duration = 4,
+									})
+								end
+							end)
 							st.busy = false
 						end)
 						if not ok then
@@ -5166,11 +5177,20 @@ function Sena:CreateWindow(config)
 				local function StartBroadcast()
 					local pet = PickPet(nil)
 					if not pet then
-						SetStatus(L("NoPet", "No recipe pet for this tier in your inventory (unfavorited, not in the pen)."))
+						SetStatus(L("NoPet", "No recipe pet for this tier in your inventory."))
+						pcall(function()
+							if Sena and Sena.Notify then
+								Sena:Notify({
+									Title = L("ListTitle", "Partner Fuse"),
+									Content = "No recipe pet found for " .. tostring(st.tier or "") .. " in your inventory!",
+									Duration = 4,
+								})
+							end
+						end)
 						return
 					end
 					SetStatus(L("Posting", "Broadcasting..."))
-					local data, err = Call("/fuse/post", { cat = pet.Category, pet = pet.Uid, job = game.JobId })
+					local data, err = Call("/fuse/post", { cat = pet.Category, pet = pet.Uid, job = game.JobId, place = game.PlaceId })
 					if not data or err then
 						local msg = tostring(err or "error")
 						if msg:match("^cooldown:") then msg = L("Cooldown", "Wait ") .. msg:match("%d+") .. "s" end
@@ -5185,6 +5205,7 @@ function Sena:CreateWindow(config)
 				end
 
 				function StopBroadcast()
+					st._promptKey = nil
 					Call("/fuse/stop", {})
 					SetBroadcastLabel(false)
 					SetStatus(L("Idle", "Not broadcasting."))
@@ -5197,7 +5218,7 @@ function Sena:CreateWindow(config)
 						if st.busy then return end
 						st.busy = true
 						local mine = st.mine
-						if mine and mine.role == "poster" and (mine.state == "open" or mine.state == "claimed") then
+						if mine and mine.role == "poster" and (mine.state == "open" or mine.state == "claimed" or mine.state == "accepted") then
 							StopBroadcast()
 						else
 							StartBroadcast()
@@ -5219,27 +5240,77 @@ function Sena:CreateWindow(config)
 					st.mine = (type(mine) == "table") and mine or nil
 					if type(mine) ~= "table" then
 						if st.matchedId then st.matchedId = nil end
+						st._promptKey = nil
 						return
 					end
-					if mine.state == "cancelled" or mine.state == "done" then
+					if mine.state == "cancelled" or mine.state == "done" or mine.state == "declined" then
 						Terminal(mine)
 					elseif mine.role == "poster" then
 						SetBroadcastLabel(true)
 						if mine.state == "open" then
+							st._promptKey = nil
 							SetStatus(L("Waiting", "Waiting for a ") .. tostring(mine.side == "Light" and "Dark" or "Light")
 								.. " " .. L("Partner", "partner") .. " (" .. tostring(mine.need) .. ")...")
 						elseif mine.state == "claimed" then
-							SetStatus(L("OnTheWay", "Partner ") .. tostring(mine.partner or "?") .. L("OnTheWayTail", " is on the way..."))
+							-- 2-WAY HANDSHAKE: Broadcaster prompt Accept / Decline
+							local promptKey = tostring(mine.id) .. "_" .. tostring(mine.partner_uid)
+							if st._promptKey ~= promptKey then
+								st._promptKey = promptKey
+								SetStatus(L("IncomingRequest", "Partner request from ") .. tostring(mine.partner or "?") .. " (" .. tostring(mine.partner_cat or "pet") .. ")! Waiting for your response...")
+								pcall(function()
+									if Sena and Sena.Prompt then
+										Sena:Prompt({
+											Title = tostring(mine.partner or "Partner Request"),
+											Content = "Wants to fuse for " .. tostring(mine.tier or "") .. " with " .. tostring(mine.partner_cat or "their pet") .. "!\nAccept and invite to your server?",
+											Avatar = tostring(mine.partner_uid or ""):match("^%d+$") and mine.partner_uid or nil,
+											Accept = L("Accept", "Accept"),
+											Decline = L("Decline", "Decline"),
+											Duration = 35,
+											Callback = function(accepted)
+												if accepted == true then
+													SetStatus(L("AcceptedPartner", "Accepted ") .. tostring(mine.partner or "partner") .. L("AcceptedPartnerTail", "! Waiting for them to arrive..."))
+													Call("/fuse/accept", { id = mine.id, job = game.JobId, place = game.PlaceId })
+												else
+													SetStatus(L("DeclinedPartner", "Declined request from ") .. tostring(mine.partner or "partner") .. ".")
+													Call("/fuse/decline", { id = mine.id })
+													st._promptKey = nil
+												end
+											end,
+										})
+									end
+								end)
+							end
+						elseif mine.state == "accepted" then
+							SetStatus(L("OnTheWay", "Partner ") .. tostring(mine.partner or "?") .. L("OnTheWayTail", " accepted! Waiting for them to arrive..."))
 						elseif mine.state == "matched" then
 							Matched(mine)
 						end
 					elseif mine.role == "joiner" then
 						if mine.state == "claimed" then
+							SetStatus(L("WaitingApproval", "Request sent! Waiting for ") .. tostring(mine.partner or "partner") .. L("WaitingApprovalTail", " to accept..."))
+						elseif mine.state == "accepted" then
+							-- Broadcaster accepted! Joiner can now teleport or enter shrine
 							if tostring(mine.job) == tostring(game.JobId) then
+								SetStatus(L("InSameServer", "Accepted! In the same server. Heading to shrine..."))
 								Call("/fuse/arrived", { id = mine.id })
 							elseif not st.teleporting then
-								Call("/fuse/fail", { id = mine.id, reason = "teleport" })
-								SetStatus(L("TeleportFailed", "Teleport failed: ") .. L("NotInServer", "not in the partner's server."))
+								SetStatus(L("Teleporting", "Accepted! Joining ") .. tostring(mine.partner or "?") .. L("TeleportingTail", "'s server..."))
+								st.teleporting = true
+								pcall(function()
+									if Sena and Sena.Notify then
+										Sena:Notify({
+											Title = L("ListTitle", "Partner Fuse"),
+											Content = tostring(mine.partner or "Partner") .. " accepted! Teleporting...",
+											Duration = 4,
+										})
+									end
+								end)
+								local okT, res, terr = pcall(teleport, mine.job, mine.place)
+								if not okT or not res then
+									st.teleporting = false
+									Call("/fuse/fail", { id = mine.id, reason = "teleport" })
+									SetStatus(L("TeleportFailed", "Teleport failed: ") .. tostring(terr or res or "unknown"))
+								end
 							end
 						elseif mine.state == "matched" then
 							Matched(mine)
@@ -5404,7 +5475,9 @@ function Sena:CreateWindow(config)
 						end
 						local who = mine and ('<font color="#4ADE80">' .. L("You", "You") .. '</font>') or tostring(entry.name or "??****")
 						if mine and entry.state == "claimed" then
-							who = who .. '  <font color="#A2A2AE">· ' .. tostring(entry.partner or "?") .. " " .. L("OnTheWayShort", "on the way") .. "</font>"
+							who = who .. '  <font color="#EAB308">· ' .. tostring(entry.partner or "?") .. " " .. L("RequestingShort", "requesting") .. "</font>"
+						elseif mine and entry.state == "accepted" then
+							who = who .. '  <font color="#4ADE80">· ' .. tostring(entry.partner or "?") .. " " .. L("OnTheWayShort", "on the way") .. "</font>"
 						end
 						New("TextLabel", {
 							Name = "Who",
