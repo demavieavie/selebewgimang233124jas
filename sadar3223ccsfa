@@ -512,6 +512,7 @@ local function EnsureNotifyGui()
 end
 
 function Sena:Notify(config)
+	Elevate()
 	config = config or {}
 	local title    = tostring(config.Title or config[1] or "Sena")
 	local content  = tostring(config.Content or config.Description or config[2] or "")
@@ -1219,7 +1220,9 @@ local function HandleJoinUpdate(this, req)
 		if status == "accepted" then
 			local place = tonumber(req.place)
 			local job = tostring(req.job or "")
-			if place and job ~= "" then
+			if job == tostring(game.JobId) then
+				Sena:Notify({ Title = "Request join", Content = "You are already in " .. tostring(req.to_name or "their") .. "'s server.", Duration = 4 })
+			elseif place and job ~= "" then
 				Sena:Notify({ Title = "Request join", Content = tostring(req.to_name or "They") .. " accepted. Joining their server...", Duration = 5 })
 				task.delay(1.2, function()
 					pcall(function()
@@ -1322,19 +1325,31 @@ local function StartBackendLoop(this)
 					this.DmSince = tonumber(data.dm_seq)
 				end
 
-				-- join requests: incoming pending -> prompt, outgoing answered -> teleport
+				-- join requests: incoming pending -> prompt, outgoing answered -> teleport.
+				-- The server replays every row newer than join_since and keeps answered
+				-- rows for 15 min, so a fresh session (join_since 0, e.g. right after the
+				-- teleport that the accept caused) would see its own "accepted" row again and
+				-- teleport in a loop. First sync of a session: adopt the sequence, only
+				-- surface incoming pending requests, never re-run old outcomes.
+				local firstJoinSync = this.JoinSince == 0
+				if tonumber(data.join_seq) and firstJoinSync then
+					this.JoinSince = math.max(this.JoinSince, tonumber(data.join_seq))
+				end
 				if type(data.joins) == "table" then
 					for _, req in ipairs(data.joins) do
 						local ver = tonumber(req.ver) or 0
 						if ver > this.JoinSince then this.JoinSince = ver end
-						task.spawn(function()
-							Elevate()
-							local ok, err = pcall(HandleJoinUpdate, this, req)
-							if not ok then warn("[Sena] join handler error:", err) end
-						end)
+						if not firstJoinSync or (req.incoming and tostring(req.status) == "pending") then
+							task.spawn(function()
+								Elevate()
+								local ok, err = pcall(HandleJoinUpdate, this, req)
+								if not ok then warn("[Sena] join handler error:", err) end
+							end)
+						else
+							this.JoinSeen = this.JoinSeen or {}
+							this.JoinSeen[tostring(req.id or "") .. ":" .. tostring(req.status or "")] = true
+						end
 					end
-				elseif tonumber(data.join_seq) and this.JoinSince == 0 then
-					this.JoinSince = tonumber(data.join_seq)
 				end
 
 				if data.fuse ~= nil then
