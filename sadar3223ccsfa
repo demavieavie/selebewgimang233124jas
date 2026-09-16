@@ -135,6 +135,46 @@ local function WatchLogo(image, fallback)
 	end)
 end
 
+local function LoadCustomAsset(uri)
+	if not uri or uri == "" then return "" end
+	uri = tostring(uri)
+	if uri:match("^rbxassetid://") or uri:match("^rbxasset://") or uri:match("^rbxthumb://") then
+		return uri
+	end
+
+	local getAsset = (type(getcustomasset) == "function" and getcustomasset)
+		or (syn and type(syn.getcustomasset) == "function" and syn.getcustomasset)
+
+	if uri:match("^https?://") then
+		if not getAsset then
+			warn("[Sena] getcustomasset not available to load web link:", uri)
+			return ""
+		end
+		local hash = 0
+		for i = 1, #uri do hash = (hash * 31 + uri:byte(i)) % 2147483647 end
+		local fileName = "sena_asset_" .. tostring(hash) .. ".png"
+		if isfile and isfile(fileName) then
+			local ok, asset = pcall(getAsset, fileName)
+			if ok and asset then return asset end
+		end
+		local ok, content = pcall(function() return game:HttpGet(uri) end)
+		if ok and content and #content > 0 and writefile then
+			pcall(writefile, fileName, content)
+			local okAsset, asset = pcall(getAsset, fileName)
+			if okAsset and asset then return asset end
+		end
+		warn("[Sena] failed to download custom asset from URL:", uri)
+		return ""
+	end
+
+	if getAsset and isfile and isfile(uri) then
+		local ok, asset = pcall(getAsset, uri)
+		if ok and asset then return asset end
+	end
+
+	return uri
+end
+
 local function Padding(parent, l, r, t, b)
 	return New("UIPadding", {
 		PaddingLeft = UDim.new(0, l or 0),
@@ -1485,17 +1525,75 @@ function Sena:BackendCall(path, params)
 	return data, nil
 end
 
-function Sena:SendChat(text)
+local ROOM_TAG_MAP = {
+	id = "indonesian",
+	indo = "indonesian",
+	indonesia = "indonesian",
+	indonesian = "indonesian",
+	ph = "philippines",
+	philippines = "philippines",
+	filipino = "philippines",
+	pinoy = "philippines",
+	vn = "vietnam",
+	vietnam = "vietnam",
+	vietnamese = "vietnam",
+	br = "brazilian",
+	brazil = "brazilian",
+	brazilian = "brazilian",
+	brasil = "brazilian",
+	gen = "general",
+	general = "general",
+	all = "general",
+}
+
+local ROOM_TAGS = {
+	indonesian = "[ID]",
+	philippines = "[PH]",
+	vietnam = "[VN]",
+	brazilian = "[BR]",
+	general = "[GEN]",
+}
+
+local function ParseMessageRoom(msg)
+	if type(msg) ~= "table" then return "general", "" end
+	local text = tostring(msg.text or "")
+	local tag, body = text:match("^%[([%w_]+)%]%s*(.*)$")
+	local detectedRoom = nil
+	if tag then
+		local r = ROOM_TAG_MAP[tag:lower()]
+		if r then
+			detectedRoom = r
+			text = body
+		end
+	end
+	if msg.room and type(msg.room) == "string" and msg.room ~= "" then
+		local r = msg.room:lower()
+		if ROOM_TAG_MAP[r] then
+			detectedRoom = ROOM_TAG_MAP[r]
+		end
+	end
+	return detectedRoom or "general", text
+end
+
+function Sena:SendChat(text, room)
 	if not Backend then return false, "not connected" end
 	text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
 	if text == "" then return false, "empty" end
+
+	room = tostring(room or "general"):lower()
+	local tag = ROOM_TAGS[room]
+	local sendText = text
+	if tag and not sendText:find("^%[") and room ~= "general" then
+		sendText = tag .. " " .. text
+	end
 
 	local data = HttpGetJson(BackendUrl("/chat/send", {
 		uid = LocalUserId(),
 		key = Backend.Key,
 		name = LocalUserName(),
 		game = Backend.Game,
-		text = text,
+		text = sendText,
+		room = room,
 	}))
 	if not data then return false, "no response" end
 	if data.ok then return true end
@@ -3968,9 +4066,11 @@ function Sena:CreateWindow(config)
 				}, BodyList)
 				Corner(Row, 6)
 
-				local HEADER_H = 28
-				local BAR_H    = IS_TOUCH and 34 or 28
-				local PAD      = 6
+				local HEADER_H   = 28
+				local CATEGORY_H = 30
+				local BAR_H      = IS_TOUCH and 34 or 28
+				local PAD        = 6
+				local ARROW_W    = 22
 
 				New("TextLabel", {
 					Name = "Title",
@@ -3995,7 +4095,7 @@ function Sena:CreateWindow(config)
 					BorderSizePixel = 0,
 					Font = Theme.FontBold,
 					RichText = true,
-					Text = "Global",
+					Text = "Rooms",
 					TextColor3 = Theme.Text,
 					TextSize = 11,
 					TextTruncate = Enum.TextTruncate.AtEnd,
@@ -4019,10 +4119,100 @@ function Sena:CreateWindow(config)
 					TextXAlignment = Enum.TextXAlignment.Right,
 				}, Row)
 
+				local activeRoom = "general"
+				local ROOMS = {
+					{ id = "general",     label = "General" },
+					{ id = "indonesian",  label = "Indonesian" },
+					{ id = "philippines", label = "Philippines" },
+					{ id = "vietnam",     label = "Vietnam" },
+					{ id = "brazilian",   label = "Brazilian" },
+				}
+
+				local LeftBtn = New("TextButton", {
+					Name = "ScrollLeft",
+					Active = true,
+					Position = UDim2.new(0, PAD, 0, HEADER_H + 2),
+					Size = UDim2.new(0, ARROW_W, 0, CATEGORY_H),
+					BackgroundColor3 = Theme.Card,
+					BorderSizePixel = 0,
+					Font = Theme.FontBold,
+					Text = "‹",
+					TextColor3 = Theme.SubText,
+					TextSize = 16,
+					AutoButtonColor = false,
+					ZIndex = 4,
+				}, Row)
+				Corner(LeftBtn, 6)
+				Stroke(LeftBtn, Theme.StrokeSoft, 1)
+
+				local RightBtn = New("TextButton", {
+					Name = "ScrollRight",
+					Active = true,
+					AnchorPoint = Vector2.new(1, 0),
+					Position = UDim2.new(1, -PAD, 0, HEADER_H + 2),
+					Size = UDim2.new(0, ARROW_W, 0, CATEGORY_H),
+					BackgroundColor3 = Theme.Card,
+					BorderSizePixel = 0,
+					Font = Theme.FontBold,
+					Text = "›",
+					TextColor3 = Theme.SubText,
+					TextSize = 16,
+					AutoButtonColor = false,
+					ZIndex = 4,
+				}, Row)
+				Corner(RightBtn, 6)
+				Stroke(RightBtn, Theme.StrokeSoft, 1)
+
+				local CatBar = New("ScrollingFrame", {
+					Name = "CategoryBar",
+					Position = UDim2.new(0, PAD + ARROW_W + 4, 0, HEADER_H + 2),
+					Size = UDim2.new(1, -PAD * 2 - (ARROW_W * 2 + 8), 0, CATEGORY_H),
+					BackgroundTransparency = 1,
+					BorderSizePixel = 0,
+					ScrollBarThickness = 2,
+					ScrollBarImageColor3 = Theme.Track,
+					ScrollingDirection = Enum.ScrollingDirection.X,
+					CanvasSize = UDim2.new(0, 0, 0, 0),
+					AutomaticCanvasSize = Enum.AutomaticSize.X,
+					ZIndex = 3,
+				}, Row)
+
+				New("UIListLayout", {
+					FillDirection = Enum.FillDirection.Horizontal,
+					Padding = UDim.new(0, 5),
+					SortOrder = Enum.SortOrder.LayoutOrder,
+					VerticalAlignment = Enum.VerticalAlignment.Center,
+				}, CatBar)
+
+				local function ScrollCat(delta)
+					Elevate()
+					local maxScroll = math.max(0, CatBar.AbsoluteCanvasSize.X - CatBar.AbsoluteWindowSize.X)
+					local newX = math.clamp(CatBar.CanvasPosition.X + delta, 0, maxScroll)
+					Tween(CatBar, QUICK, { CanvasPosition = Vector2.new(newX, 0) })
+				end
+				OnTap(LeftBtn, function() ScrollCat(-110) end)
+				LeftBtn.MouseButton1Click:Connect(function() ScrollCat(-110) end)
+				LeftBtn.Activated:Connect(function() ScrollCat(-110) end)
+
+				OnTap(RightBtn, function() ScrollCat(110) end)
+				RightBtn.MouseButton1Click:Connect(function() ScrollCat(110) end)
+				RightBtn.Activated:Connect(function() ScrollCat(110) end)
+
+				CatBar.InputChanged:Connect(function(input)
+					if input.UserInputType == Enum.UserInputType.MouseWheel then
+						ScrollCat(-input.Position.Z * 60)
+					end
+				end)
+
+				LeftBtn.MouseEnter:Connect(function() Elevate() Tween(LeftBtn, QUICK, { BackgroundColor3 = Theme.ElementHover, TextColor3 = Theme.Text }) end)
+				LeftBtn.MouseLeave:Connect(function() Elevate() Tween(LeftBtn, QUICK, { BackgroundColor3 = Theme.Card, TextColor3 = Theme.SubText }) end)
+				RightBtn.MouseEnter:Connect(function() Elevate() Tween(RightBtn, QUICK, { BackgroundColor3 = Theme.ElementHover, TextColor3 = Theme.Text }) end)
+				RightBtn.MouseLeave:Connect(function() Elevate() Tween(RightBtn, QUICK, { BackgroundColor3 = Theme.Card, TextColor3 = Theme.SubText }) end)
+
 				local Scroll = New("ScrollingFrame", {
 					Name = "Messages",
-					Position = UDim2.new(0, PAD, 0, HEADER_H),
-					Size = UDim2.new(1, -PAD * 2, 1, -HEADER_H - BAR_H - PAD * 2),
+					Position = UDim2.new(0, PAD, 0, HEADER_H + CATEGORY_H + 6),
+					Size = UDim2.new(1, -PAD * 2, 1, -HEADER_H - CATEGORY_H - BAR_H - PAD * 2 - 6),
 					BackgroundColor3 = Theme.Card,
 					BorderSizePixel = 0,
 					ScrollBarThickness = 3,
@@ -4163,7 +4353,7 @@ function Sena:CreateWindow(config)
 				local AVATAR = 24
 				local NameToIdCache = {}
 
-				local function AddMessage(msg)
+				local function AddMessage(msg, overrideText)
 					if not Row.Parent then return end
 					local stick = NearBottom()
 					shown = shown + 1
@@ -4283,7 +4473,7 @@ function Sena:CreateWindow(config)
 						Size = UDim2.new(1, -left, 0, 0),
 						AutomaticSize = Enum.AutomaticSize.Y,
 						Font = Theme.FontBody,
-						Text = tostring(msg.text or ""),
+						Text = tostring(overrideText or msg.text or ""),
 						TextColor3 = mine and Theme.Text or Theme.SubText,
 						TextSize = 12,
 						TextWrapped = true,
@@ -4293,6 +4483,139 @@ function Sena:CreateWindow(config)
 					}, item)
 					Trim()
 					if stick then ScrollToBottom() end
+				end
+
+				local RoomButtons = {}
+				local RoomUnread = {
+					general = 0,
+					indonesian = 0,
+					philippines = 0,
+					vietnam = 0,
+					brazilian = 0,
+				}
+				local RoomMessages = {
+					general = {},
+					indonesian = {},
+					philippines = {},
+					vietnam = {},
+					brazilian = {},
+				}
+
+				local function UpdateCategoryButtons()
+					Elevate()
+					for _, rInfo in ipairs(ROOMS) do
+						local btn = RoomButtons[rInfo.id]
+						if btn then
+							local isSelected = (activeRoom == rInfo.id)
+							local unread = RoomUnread[rInfo.id] or 0
+							local titleText = rInfo.label
+							if not isSelected and unread > 0 then
+								titleText = string.format('%s  <font color="#F87171">●</font>', rInfo.label)
+							end
+							btn.Text = titleText
+							Tween(btn, QUICK, {
+								BackgroundColor3 = isSelected and Theme.ElementHover or Theme.Card,
+								TextColor3 = isSelected and Theme.Text or Theme.Dim,
+							})
+							local stroke = btn:FindFirstChildOfClass("UIStroke")
+							if stroke then
+								stroke.Color = isSelected and Theme.Stroke or Theme.StrokeSoft
+							end
+						end
+					end
+				end
+
+				local function SwitchRoom(targetRoom)
+					Elevate()
+					if not RoomMessages[targetRoom] then targetRoom = "general" end
+					activeRoom = targetRoom
+					RoomUnread[activeRoom] = 0
+					UpdateCategoryButtons()
+
+					if mode ~= "pm" then
+						Box.PlaceholderText = "Message in #" .. activeRoom .. "..."
+					end
+
+					task.defer(function()
+						Elevate()
+						pcall(function()
+							local btn = RoomButtons[targetRoom]
+							if btn and CatBar.Parent then
+								local relX = btn.AbsolutePosition.X - CatBar.AbsolutePosition.X + CatBar.CanvasPosition.X
+								local btnW = btn.AbsoluteSize.X
+								local viewW = CatBar.AbsoluteWindowSize.X
+								if relX < CatBar.CanvasPosition.X then
+									CatBar.CanvasPosition = Vector2.new(math.max(0, relX - 6), 0)
+								elseif relX + btnW > CatBar.CanvasPosition.X + viewW then
+									local maxScroll = math.max(0, CatBar.AbsoluteCanvasSize.X - viewW)
+									CatBar.CanvasPosition = Vector2.new(math.min(maxScroll, relX + btnW - viewW + 6), 0)
+								end
+							end
+						end)
+					end)
+
+					for _, child in ipairs(Scroll:GetChildren()) do
+						if child:IsA("GuiObject") then
+							pcall(function() child:Destroy() end)
+						end
+					end
+					shown = 0
+
+					local history = RoomMessages[activeRoom] or {}
+					for _, item in ipairs(history) do
+						if item.type == "msg" then
+							AddMessage(item.data, item.cleanBody)
+						elseif item.type == "line" then
+							AddLine(item.text, item.ts)
+						end
+					end
+					ScrollToBottom()
+				end
+
+				for idx, rInfo in ipairs(ROOMS) do
+					local rId = rInfo.id
+					local btn = New("TextButton", {
+						Name = "Room_" .. rId,
+						LayoutOrder = idx,
+						Active = true,
+						Size = UDim2.new(0, 0, 1, -2),
+						AutomaticSize = Enum.AutomaticSize.X,
+						BackgroundColor3 = (activeRoom == rId) and Theme.ElementHover or Theme.Card,
+						BorderSizePixel = 0,
+						Font = Theme.FontBold,
+						RichText = true,
+						Text = rInfo.label,
+						TextColor3 = (activeRoom == rId) and Theme.Text or Theme.Dim,
+						TextSize = 12,
+						AutoButtonColor = false,
+						ZIndex = 3,
+					}, CatBar)
+					Corner(btn, 6)
+					Stroke(btn, (activeRoom == rId) and Theme.Stroke or Theme.StrokeSoft, 1)
+					Padding(btn, 11, 11, 0, 0)
+					RoomButtons[rId] = btn
+
+					OnTap(btn, function()
+						SwitchRoom(rId)
+					end)
+					btn.MouseButton1Click:Connect(function()
+						SwitchRoom(rId)
+					end)
+					btn.Activated:Connect(function()
+						SwitchRoom(rId)
+					end)
+					btn.MouseEnter:Connect(function()
+						Elevate()
+						if activeRoom ~= rId then
+							Tween(btn, QUICK, { BackgroundColor3 = Theme.ElementHover, TextColor3 = Theme.SubText })
+						end
+					end)
+					btn.MouseLeave:Connect(function()
+						Elevate()
+						if activeRoom ~= rId then
+							Tween(btn, QUICK, { BackgroundColor3 = Theme.Card, TextColor3 = Theme.Dim })
+						end
+					end)
 				end
 
 				-- hapus baris yang udah lewat ttl (default 10 menit, ikut server)
@@ -4306,17 +4629,54 @@ function Sena:CreateWindow(config)
 							end
 						end
 					end
+					for _, list in pairs(RoomMessages) do
+						while #list > 0 and (tonumber(list[1].ts) or 0) < cutoff do
+							table.remove(list, 1)
+						end
+					end
 				end
 
 				local function Append(msg)
 					if type(msg) ~= "table" then return end
 					local ts = tonumber(msg.ts) or os.time()
 					if ts < os.time() - ChatTtl() then return end
-					AddMessage(msg)
+
+					if msg.pm then
+						for _, r in ipairs(ROOMS) do
+							local list = RoomMessages[r.id]
+							if list then
+								list[#list + 1] = { type = "msg", data = msg, cleanBody = msg.text, ts = ts }
+								if #list > maxShown then table.remove(list, 1) end
+							end
+						end
+						AddMessage(msg, msg.text)
+						return
+					end
+
+					local room, cleanBody = ParseMessageRoom(msg)
+					local list = RoomMessages[room] or RoomMessages.general
+					list[#list + 1] = { type = "msg", data = msg, cleanBody = cleanBody, ts = ts }
+					if #list > maxShown then table.remove(list, 1) end
+
+					if room == activeRoom then
+						AddMessage(msg, cleanBody)
+					else
+						RoomUnread[room] = (RoomUnread[room] or 0) + 1
+						UpdateCategoryButtons()
+					end
 				end
 
 				local function SystemLine(text)
-					AddLine('<font color="' .. dimHex .. '"><i>' .. Escape(text) .. '</i></font>', os.time())
+					local ts = os.time()
+					local formatted = '<font color="' .. dimHex .. '"><i>' .. Escape(text) .. '</i></font>'
+					for _, r in ipairs(ROOMS) do
+						local list = RoomMessages[r.id]
+						if list then
+							list[#list + 1] = { type = "line", text = formatted, ts = ts }
+							if #list > maxShown then table.remove(list, 1) end
+						end
+					end
+					AddLine(formatted, ts)
 				end
 
 				local sending = false
@@ -4354,8 +4714,8 @@ function Sena:CreateWindow(config)
 						Box.PlaceholderText = "Private message to " .. pmTarget .. "..."
 					else
 						mode = "global"
-						ModeBtn.Text = "Global"
-						Box.PlaceholderText = "Type a message..."
+						ModeBtn.Text = "Rooms"
+						Box.PlaceholderText = "Message in #" .. activeRoom .. "..."
 					end
 				end
 				local function ToggleMode()
@@ -4369,10 +4729,14 @@ function Sena:CreateWindow(config)
 					SystemLine("Commands:")
 					SystemLine("/help - this list")
 					SystemLine("/pm <player> [message] - private message (switches you to PM mode)")
-					SystemLine("/global - back to global chat")
+					SystemLine("/global or /gen - switch to General room")
+					SystemLine("/id - switch to Indonesian room")
+					SystemLine("/ph - switch to Philippines room")
+					SystemLine("/vn - switch to Vietnam room")
+					SystemLine("/br - switch to Brazilian room")
 					SystemLine("/requestjoin <player> - ask to join their server")
 					SystemLine("/accept  /decline - answer the latest join request")
-					SystemLine("Tip: the Global / PM button at the top switches modes too. Names are Roblox usernames, they must be online in Sena.")
+					SystemLine("Tip: Click the category tabs at the top to change room.")
 				end
 
 				-- returns text to send (or nil when the command was fully handled)
@@ -4383,9 +4747,30 @@ function Sena:CreateWindow(config)
 					if cmd == "help" or cmd == "h" or cmd == "cmd" then
 						Help()
 						return nil
-					elseif cmd == "global" or cmd == "g" or cmd == "all" then
+					elseif cmd == "global" or cmd == "g" or cmd == "all" or cmd == "gen" or cmd == "general" then
+						SwitchRoom("general")
 						SetMode("global")
-						SystemLine("Global chat")
+						SystemLine("General room")
+						return nil
+					elseif cmd == "id" or cmd == "indo" or cmd == "indonesia" or cmd == "indonesian" then
+						SwitchRoom("indonesian")
+						SetMode("global")
+						SystemLine("Indonesian room")
+						return nil
+					elseif cmd == "ph" or cmd == "philippines" or cmd == "filipino" or cmd == "pinoy" then
+						SwitchRoom("philippines")
+						SetMode("global")
+						SystemLine("Philippines room")
+						return nil
+					elseif cmd == "vn" or cmd == "vietnam" or cmd == "vietnamese" then
+						SwitchRoom("vietnam")
+						SetMode("global")
+						SystemLine("Vietnam room")
+						return nil
+					elseif cmd == "br" or cmd == "brazil" or cmd == "brazilian" or cmd == "brasil" then
+						SwitchRoom("brazilian")
+						SetMode("global")
+						SystemLine("Brazilian room")
 						return nil
 					elseif cmd == "pm" or cmd == "w" or cmd == "msg" or cmd == "dm" then
 						local who, body = rest:match("^(%S+)%s*(.*)$")
@@ -4463,13 +4848,14 @@ function Sena:CreateWindow(config)
 
 					sending = true
 					SetSend(false, "...")
+					local sendRoom = activeRoom
 					task.spawn(function()
 						Elevate()
 						local ok, err
 						if mode == "pm" then
 							ok, err = Sena:SendDM(pmTarget, text)
 						else
-							ok, err = Sena:SendChat(text)
+							ok, err = Sena:SendChat(text, sendRoom)
 						end
 						if ok then
 							lastSent = os.clock()
@@ -4575,9 +4961,12 @@ function Sena:CreateWindow(config)
 				local funcs = {}
 				function funcs:Append(msg) Append(msg) end
 				function funcs:System(text) SystemLine(text) end
+				function funcs:SetRoom(room) SwitchRoom(room) end
+				function funcs:GetRoom() return activeRoom end
 				function funcs:Clear()
+					RoomMessages = { general = {}, indonesian = {}, philippines = {}, vietnam = {}, brazilian = {} }
 					for _, child in ipairs(Scroll:GetChildren()) do
-						if child:IsA("TextLabel") then pcall(function() child:Destroy() end) end
+						if child:IsA("GuiObject") then pcall(function() child:Destroy() end) end
 					end
 					shown = 0
 				end
@@ -5908,6 +6297,159 @@ function Sena:CreateWindow(config)
 				return handle
 			end
 
+			function Elements:AddSupportCard(itemCfg)
+				itemCfg = itemCfg or {}
+				local sTitle      = tostring(itemCfg.Title or "Support this Project")
+				local sDesc       = tostring(itemCfg.Description or itemCfg.Content
+					or "Support this project to keep it alive! Your contributions directly fund 24/7 server infrastructure, game bypass updates, and continuous maintenance for the entire community.")
+				local qrRaw       = itemCfg.Image or itemCfg.QR
+					or "https://cdn.discordapp.com/attachments/1547908995044605992/1549786752225378324/quality_restoration_20260916211820303.png?ex=6aabf6e3&is=6aaaa563&hm=43de30c490e2893c370ba44875023ed6a5974bab0dfc5d936b7daac988132cee"
+				local donateUrl   = tostring(itemCfg.Url or itemCfg.Link or "https://sociabuzz.com/senaroblox/tribe")
+				local buttonLabel = tostring(itemCfg.ButtonText or "International Sociabuzz")
+				local qrSize      = math.max(100, math.min(240, tonumber(itemCfg.QrSize) or 136))
+
+				itemOrder = itemOrder + 1
+
+				local Card = New("Frame", {
+					Name = "SupportCard",
+					LayoutOrder = itemOrder,
+					BackgroundColor3 = Theme.Element,
+					BorderSizePixel = 0,
+					Size = UDim2.new(1, 0, 0, 0),
+					AutomaticSize = Enum.AutomaticSize.Y,
+					ClipsDescendants = true,
+				}, BodyList)
+				Corner(Card, 8)
+				Stroke(Card, Theme.Stroke, 1)
+				Padding(Card, 10, 10, 10, 10)
+
+				local Layout = New("UIListLayout", {
+					Padding = UDim.new(0, 8),
+					SortOrder = Enum.SortOrder.LayoutOrder,
+					HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				}, Card)
+
+				local Title = New("TextLabel", {
+					Name = "Title",
+					LayoutOrder = 1,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 0),
+					AutomaticSize = Enum.AutomaticSize.Y,
+					Font = Theme.FontBold,
+					Text = sTitle,
+					TextColor3 = Theme.Text,
+					TextSize = 14,
+					TextXAlignment = Enum.TextXAlignment.Center,
+					TextWrapped = true,
+				}, Card)
+
+				local Desc = New("TextLabel", {
+					Name = "Desc",
+					LayoutOrder = 2,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 0),
+					AutomaticSize = Enum.AutomaticSize.Y,
+					Font = Theme.FontBody,
+					Text = sDesc,
+					TextColor3 = Theme.SubText,
+					TextSize = 12,
+					TextXAlignment = Enum.TextXAlignment.Center,
+					TextWrapped = true,
+				}, Card)
+
+				local QrFrame = New("Frame", {
+					Name = "QrWrapper",
+					LayoutOrder = 3,
+					BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+					BorderSizePixel = 0,
+					Size = UDim2.new(0, qrSize, 0, qrSize),
+				}, Card)
+				Corner(QrFrame, 8)
+				Padding(QrFrame, 6, 6, 6, 6)
+
+				local QrImg = New("ImageLabel", {
+					Name = "QrCode",
+					BackgroundTransparency = 1,
+					BorderSizePixel = 0,
+					Size = UDim2.new(1, 0, 1, 0),
+					ScaleType = Enum.ScaleType.Fit,
+					Image = "",
+				}, QrFrame)
+
+				task.spawn(function()
+					Elevate()
+					local assetUri = LoadCustomAsset(qrRaw)
+					if assetUri and assetUri ~= "" then
+						QrImg.Image = assetUri
+					end
+				end)
+
+				local CopyBtn = New("TextButton", {
+					Name = "CopyLink",
+					LayoutOrder = 4,
+					Active = true,
+					Size = UDim2.new(1, 0, 0, 34),
+					BackgroundColor3 = Theme.Accent,
+					BorderSizePixel = 0,
+					Font = Theme.FontBold,
+					Text = buttonLabel,
+					TextColor3 = Theme.AccentText,
+					TextSize = 12,
+					AutoButtonColor = false,
+				}, Card)
+				Corner(CopyBtn, 6)
+
+				CopyBtn.MouseEnter:Connect(function()
+					Elevate()
+					Tween(CopyBtn, QUICK, { BackgroundTransparency = 0.12 })
+				end)
+				CopyBtn.MouseLeave:Connect(function()
+					Elevate()
+					Tween(CopyBtn, QUICK, { BackgroundTransparency = 0 })
+				end)
+
+				local function DoCopy()
+					Elevate()
+					local copied = false
+					if setclipboard then
+						pcall(setclipboard, donateUrl)
+						copied = true
+					elseif syn and syn.write_clipboard then
+						pcall(syn.write_clipboard, donateUrl)
+						copied = true
+					elseif toclipboard then
+						pcall(toclipboard, donateUrl)
+						copied = true
+					end
+
+					Sena:Notify({
+						Title = "Link Copied!",
+						Content = "Sociabuzz donation link copied to clipboard.",
+						Icon = "check",
+						Duration = 4,
+					})
+
+					CopyBtn.Text = "Copied to Clipboard! ✓"
+					task.delay(2.5, function()
+						if CopyBtn and CopyBtn.Parent then
+							CopyBtn.Text = buttonLabel
+						end
+					end)
+				end
+
+				OnTap(CopyBtn, DoCopy)
+				CopyBtn.MouseButton1Click:Connect(DoCopy)
+				CopyBtn.Activated:Connect(DoCopy)
+
+				Register(Card, sTitle .. " " .. sDesc)
+
+				local handle = {}
+				function handle:SetTitle(t) Title.Text = tostring(t or "") end
+				function handle:SetDescription(d) Desc.Text = tostring(d or "") end
+				return handle
+			end
+			Elements.AddDonationCard = Elements.AddSupportCard
+
 			Elements.AddChat = Elements.AddLiveChat
 
 			Section.Api = Elements
@@ -5944,5 +6486,7 @@ task.defer(function()
 	local ok, cfg = pcall(function() return getgenv and getgenv().SenaBackend end)
 	Sena:ConnectBackend((ok and type(cfg) == "table") and cfg or {})
 end)
+
+if getgenv then getgenv().Sena = Sena end
 
 return Sena
