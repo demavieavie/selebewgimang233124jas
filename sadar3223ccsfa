@@ -502,30 +502,56 @@ Sena.Flags = {}
 Sena.Windows = {}
 Sena.Unloaded = false
 Sena.IsDonator = false
+Sena.IsTrial = false
 do
+	local okT, valT = pcall(function()
+		return (getgenv and getgenv().SenaIsTrial == true) or (_G and _G.SenaIsTrial == true)
+	end)
+	if okT and valT then
+		Sena.IsTrial = true
+	end
 	local ok, val = pcall(function()
 		return (getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true)
 	end)
-	if ok and val then
+	if ok and val and not Sena.IsTrial then
 		Sena.IsDonator = true
 	end
 end
 
-function Sena:SetDonator(state)
-	Sena.IsDonator = state and true or false
-	if getgenv then getgenv().SenaIsDonator = Sena.IsDonator end
-	if _G then _G.SenaIsDonator = Sena.IsDonator end
+function Sena:SetDonator(state, isTrial)
+	if isTrial then
+		Sena.IsTrial = true
+		Sena.IsDonator = false
+	else
+		Sena.IsTrial = false
+		Sena.IsDonator = state and true or false
+	end
+	if getgenv then
+		getgenv().SenaIsDonator = Sena.IsDonator
+		getgenv().SenaIsTrial = Sena.IsTrial
+	end
+	if _G then
+		_G.SenaIsDonator = Sena.IsDonator
+		_G.SenaIsTrial = Sena.IsTrial
+	end
 end
 
 local function IsDonator()
-	if Sena and Sena.IsDonator == true then return true end
-	if getgenv and getgenv().SenaIsDonator == true then return true end
-	if _G and _G.SenaIsDonator == true then return true end
+	if Sena and (Sena.IsDonator == true or Sena.IsTrial == true) then return true end
+	if getgenv and (getgenv().SenaIsDonator == true or getgenv().SenaIsTrial == true) then return true end
+	if _G and (_G.SenaIsDonator == true or _G.SenaIsTrial == true) then return true end
 	return false
 end
 
 function Sena:IsDonator()
 	return IsDonator()
+end
+
+function Sena:IsTrial()
+	if Sena and Sena.IsTrial == true then return true end
+	if getgenv and getgenv().SenaIsTrial == true then return true end
+	if _G and _G.SenaIsTrial == true then return true end
+	return false
 end
 
 Sena.UnlockRegistry = Sena.UnlockRegistry or {}
@@ -1404,7 +1430,8 @@ local function StartBackendLoop(this)
 		-- berhenti kalau Disconnect, atau lib ini di-unload (Window:Destroy).
 		-- CreateWindow berikutnya manggil ConnectBackend lagi buat nyalain ulang.
 		while this.Running and not Sena.Unloaded do
-			local isDon = (getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true) or (Sena and Sena.IsDonator == true)
+			local isTrial = (getgenv and getgenv().SenaIsTrial == true) or (_G and _G.SenaIsTrial == true) or (Sena and Sena.IsTrial == true)
+			local isDon = not isTrial and ((getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true) or (Sena and Sena.IsDonator == true))
 			local lic = (getgenv and getgenv().SenaKey) or (_G and _G.SenaKey) or ""
 			local params = {
 				uid = uid,
@@ -1412,6 +1439,7 @@ local function StartBackendLoop(this)
 				name = LocalUserName(),
 				display = (LocalPlayer and LocalPlayer.DisplayName) or "",
 				donator = isDon and "1" or "0",
+				trial = isTrial and "1" or "0",
 				lic = tostring(lic or ""),
 				chat_since = this.ChatSince,
 				ann_since = this.AnnSince,
@@ -1428,6 +1456,19 @@ local function StartBackendLoop(this)
 				failures = 0
 				this.Connected = true
 				this.Online = tonumber(data.online) or this.Online
+
+				-- update tier from server verification
+				if data.tier == "trial" or data.is_trial == true then
+					Sena.IsTrial = true
+					Sena.IsDonator = false
+					if getgenv then getgenv().SenaIsTrial = true; getgenv().SenaIsDonator = false end
+					if _G then _G.SenaIsTrial = true; _G.SenaIsDonator = false end
+				elseif data.tier == "donator" or data.is_donator == true then
+					Sena.IsTrial = false
+					Sena.IsDonator = true
+					if getgenv then getgenv().SenaIsTrial = false; getgenv().SenaIsDonator = true end
+					if _G then _G.SenaIsTrial = false; _G.SenaIsDonator = true end
+				end
 
 				-- server nandain user ini kena ban chat (kata kasar) -> keluarin dari game
 				if type(data.kick) == "string" and data.kick ~= "" then
@@ -1628,7 +1669,8 @@ end
 -- GET <api><path> dengan uid/key/name/game/place otomatis. Balik (data|nil, err).
 function Sena:BackendCall(path, params)
 	if not Backend then return nil, "not connected" end
-	local isDon = (getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true) or (Sena and Sena.IsDonator == true)
+	local isTrial = (getgenv and getgenv().SenaIsTrial == true) or (_G and _G.SenaIsTrial == true) or (Sena and Sena.IsTrial == true)
+	local isDon = not isTrial and ((getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true) or (Sena and Sena.IsDonator == true))
 	local lic = (getgenv and getgenv().SenaKey) or (_G and _G.SenaKey) or ""
 	local merged = {
 		uid = LocalUserId(),
@@ -1638,6 +1680,7 @@ function Sena:BackendCall(path, params)
 		game = Backend.Game or "",
 		place = game.PlaceId,
 		donator = isDon and "1" or "0",
+		trial = isTrial and "1" or "0",
 		lic = tostring(lic or ""),
 	}
 	for k, v in pairs(params or {}) do merged[k] = v end
@@ -1702,6 +1745,19 @@ function Sena:SendChat(text, room)
 	text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
 	if text == "" then return false, "empty" end
 
+	-- Block key sharing in chat
+	local checkUpper = text:upper()
+	if checkUpper:match("SENA%-[%w]+%-[%w]+%-[%w]+") or checkUpper:match("TRIAL%-[%w]+%-[%w]+%-[%w]+") or text:match("%w%w%w%w%-%w%w%w%w%-%w%w%w%w") then
+		pcall(function()
+			game:GetService("StarterGui"):SetCore("SendNotification", {
+				Title = "Sena Chat",
+				Text = "Pesan diblokir: Dilarang membagikan key lisensi di chat!",
+				Duration = 6,
+			})
+		end)
+		return false, "Sharing key is prohibited"
+	end
+
 	room = tostring(room or "general"):lower()
 	local tag = ROOM_TAGS[room]
 	local sendText = text
@@ -1709,7 +1765,8 @@ function Sena:SendChat(text, room)
 		sendText = tag .. " " .. text
 	end
 
-	local isDon = (getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true) or (Sena and Sena.IsDonator == true)
+	local isTrial = (getgenv and getgenv().SenaIsTrial == true) or (_G and _G.SenaIsTrial == true) or (Sena and Sena.IsTrial == true)
+	local isDon = not isTrial and ((getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true) or (Sena and Sena.IsDonator == true))
 	local lic = (getgenv and getgenv().SenaKey) or (_G and _G.SenaKey) or ""
 	local data = HttpGetJson(BackendUrl("/chat/send", {
 		uid = LocalUserId(),
@@ -1719,12 +1776,21 @@ function Sena:SendChat(text, room)
 		text = sendText,
 		room = room,
 		donator = isDon and "1" or "0",
+		trial = isTrial and "1" or "0",
 		lic = tostring(lic or ""),
 	}))
 	if not data then return false, "no response" end
 	if data.ok then return true end
 	local err = tostring(data.error or "error")
-	if err:match("^badword") then
+	if err:match("key_share") then
+		pcall(function()
+			game:GetService("StarterGui"):SetCore("SendNotification", {
+				Title = "Sena Chat",
+				Text = "Pesan diblokir: Dilarang membagikan key lisensi di chat!",
+				Duration = 6,
+			})
+		end)
+	elseif err:match("^badword") then
 		local minutes = err:match("^badword:(%d+)") or "?"
 		local reason = "Sena: kata kasar terdeteksi di global chat. Ban " .. minutes .. " menit."
 		task.delay(1.5, function() pcall(function() LocalPlayer:Kick(reason) end) end)
@@ -4885,11 +4951,14 @@ function Sena:CreateWindow(config)
 					end
 
 					local left = AVATAR + 8
-					local cleanName = name:gsub("%s*%[DONATOR%]", "")
-					local isDonatorMsg = (msg.donator == true) or (name:find("%[DONATOR%]") ~= nil) or (mine and ((getgenv and getgenv().SenaIsDonator == true) or (Sena and Sena.IsDonator == true)))
+					local cleanName = name:gsub("%s*%[DONATOR%]", ""):gsub("%s*%[TRIAL%]", ""):gsub("%s*%[VIP%]", "")
+					local isTrialMsg = (msg.trial == true) or (msg.tier == "trial") or (name:find("%[TRIAL%]") ~= nil) or (mine and ((getgenv and getgenv().SenaIsTrial == true) or (_G and _G.SenaIsTrial == true) or (Sena and Sena.IsTrial == true)))
+					local isDonatorMsg = not isTrialMsg and ((msg.donator == true) or (msg.tier == "donator") or (name:find("%[DONATOR%]") ~= nil) or (mine and ((getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true) or (Sena and Sena.IsDonator == true))))
 					local whoText = string.format('<font color="%s">%s</font>', mine and mineHex or Hex(tint), Escape(cleanName))
 					if isDonatorMsg then
 						whoText = whoText .. '  <font color="#F5C451"><b>[DONATOR]</b></font>'
+					elseif isTrialMsg then
+						whoText = whoText .. '  <font color="#60A5FA"><b>[TRIAL]</b></font>'
 					end
 					if msg.pm then
 						-- private message: gold PM tag, and for my own the recipient
@@ -6326,12 +6395,16 @@ function Sena:CreateWindow(config)
 							row.BackgroundColor3 = Theme.Element
 							Stroke(row, Theme.Stroke, 1)
 						end
-						local isLocalDonator = (getgenv and getgenv().SenaIsDonator == true) or (Sena and Sena.IsDonator == true)
-						local isEntryDonator = (entry.donator == true) or (tostring(entry.name or ""):find("%[DONATOR%]") ~= nil)
-						local rawEntryName = tostring(entry.name or "??****"):gsub("%s*%[DONATOR%]", "")
+						local isLocalTrial = (getgenv and getgenv().SenaIsTrial == true) or (_G and _G.SenaIsTrial == true) or (Sena and Sena.IsTrial == true)
+						local isLocalDonator = not isLocalTrial and ((getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true) or (Sena and Sena.IsDonator == true))
+						local isEntryTrial = (entry.trial == true) or (entry.tier == "trial") or (tostring(entry.name or ""):find("%[TRIAL%]") ~= nil)
+						local isEntryDonator = not isEntryTrial and ((entry.donator == true) or (entry.tier == "donator") or (tostring(entry.name or ""):find("%[DONATOR%]") ~= nil))
+						local rawEntryName = tostring(entry.name or "??****"):gsub("%s*%[DONATOR%]", ""):gsub("%s*%[TRIAL%]", ""):gsub("%s*%[VIP%]", "")
 						local who = mine and ('<font color="#4ADE80">' .. L("You", "You") .. '</font>') or Escape(rawEntryName)
 						if (mine and isLocalDonator) or (not mine and isEntryDonator) then
 							who = who .. '  <font color="#F5C451"><b>[DONATOR]</b></font>'
+						elseif (mine and isLocalTrial) or (not mine and isEntryTrial) then
+							who = who .. '  <font color="#60A5FA"><b>[TRIAL]</b></font>'
 						end
 						if mine and entry.state == "claimed" then
 							who = who .. '  <font color="#EAB308">· ' .. tostring(entry.partner or "?") .. " " .. L("RequestingShort", "requesting") .. "</font>"
