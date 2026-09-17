@@ -1827,6 +1827,17 @@ function Sena:CreateWindow(config)
 	Window.CurrentTab = nil
 	Window.Flags = Sena.Flags
 
+	pcall(function()
+		local p = GuiParent()
+		if p then
+			for _, c in ipairs(p:GetChildren()) do
+				if c.Name == "SenaUI" or c.Name == "SenaNotify" or c.Name == "SenaAnnounce" then
+					pcall(function() c:Destroy() end)
+				end
+			end
+		end
+	end)
+
 	local ScreenGui = New("ScreenGui", {
 		AutoLocalize = false,  -- Roblox otomatis nerjemahin 'Join' -> 'Bergabung' dll. dan ngerusak lebar tombol
 		Name = "SenaUI",
@@ -3227,7 +3238,7 @@ function Sena:CreateWindow(config)
 				local LockNotice = New("Frame", {
 					Name = "LockNotice",
 					Position = UDim2.new(0, 10, 0, noticeY),
-					Size = UDim2.new(1, -20, 0, 32),
+					Size = UDim2.new(1, -20, 0, 42),
 					BackgroundTransparency = 1,
 					ZIndex = 4,
 				}, Row)
@@ -3265,15 +3276,24 @@ function Sena:CreateWindow(config)
 					ZIndex = 5,
 				}, LockHeader)
 
+				local isIndo = false
+				pcall(function()
+					local loc = game:GetService("LocalizationService").RobloxLocaleId
+					if loc and string.sub(string.lower(tostring(loc)), 1, 2) == "id" then
+						isIndo = true
+					end
+				end)
+
 				New("TextLabel", {
 					Name = "LockSub",
 					Position = UDim2.new(0, 0, 0, 16),
-					Size = UDim2.new(1, 0, 0, 15),
+					Size = UDim2.new(1, 0, 0, 26),
 					BackgroundTransparency = 1,
 					Font = Theme.FontBody,
-					Text = "is exclusive to Sena Donators. Get your key at sociabuzz.com/senaroblox or dsc.gg/senahub.",
+					Text = isIndo and "Khusus Donator. Dapatkan key di sociabuzz.com/senaroblox atau Discord dsc.gg/senahub"
+						or "Exclusive to Donators. Get key at sociabuzz.com/senaroblox or Discord dsc.gg/senahub",
 					TextColor3 = Color3.fromRGB(175, 175, 190),
-					TextSize = 11,
+					TextSize = 10,
 					TextXAlignment = Enum.TextXAlignment.Left,
 					TextWrapped = true,
 					ZIndex = 5,
@@ -3281,12 +3301,12 @@ function Sena:CreateWindow(config)
 
 				-- 5. Expand Row height to comfortably fit the lock banner
 				if SetExtra then
-					SetExtra(36)
+					SetExtra(46)
 				end
 				if Recalculate then
 					Recalculate()
 				else
-					Row.Size = UDim2.new(1, 0, 0, (ROW_MIN or 40) + 36)
+					Row.Size = UDim2.new(1, 0, 0, (ROW_MIN or 40) + 46)
 				end
 
 				-- 6. LockShield to block all clicks / interactions ("fiturnya gabisa dipencet")
@@ -6336,6 +6356,8 @@ function Sena:CreateWindow(config)
 				local maxRows     = math.max(1, tonumber(itemCfg.MaxRows) or 40)
 				local visibleRows = math.max(1, tonumber(itemCfg.VisibleRows) or 4)
 				local btnW        = math.max(40, tonumber(itemCfg.ButtonWidth) or (IS_TOUCH and 72 or 64))
+				local isLocked    = (itemCfg.Locked == true or itemCfg.Donator == true) and not IsDonator()
+				local lockExtra   = isLocked and 44 or 0
 
 				itemOrder = itemOrder + 1
 				local ROW_H  = IS_TOUCH and 50 or 42
@@ -6346,13 +6368,17 @@ function Sena:CreateWindow(config)
 				local Panel = New("Frame", {
 					Name = "ActionList",
 					LayoutOrder = itemOrder,
-					BackgroundColor3 = Theme.Element,
+					BackgroundColor3 = isLocked and Color3.fromRGB(18, 18, 24) or Theme.Element,
+					BackgroundTransparency = isLocked and 0.35 or 0,
 					BorderSizePixel = 0,
-					Size = UDim2.new(1, 0, 0, PAD + TITLE + (TITLE > 0 and 4 or 0) + listH + PAD),
+					Size = UDim2.new(1, 0, 0, PAD + TITLE + (TITLE > 0 and 4 or 0) + lockExtra + listH + PAD),
 					ClipsDescendants = true,
 				}, BodyList)
 				Corner(Panel, 6)
 				pcall(function() Panel.AutoLocalize = false end)
+				if isLocked then
+					Stroke(Panel, Color3.fromRGB(80, 70, 45), 1, 0.45)
+				end
 
 				if TITLE > 0 then
 					New("TextLabel", {
@@ -6381,9 +6407,86 @@ function Sena:CreateWindow(config)
 					Visible = TITLE > 0,
 				}, Panel)
 
+				if isLocked then
+					local isIndo = false
+					pcall(function()
+						local loc = game:GetService("LocalizationService").RobloxLocaleId
+						if loc and string.sub(string.lower(tostring(loc)), 1, 2) == "id" then
+							isIndo = true
+						end
+					end)
+
+					local LockNotice = New("Frame", {
+						Name = "LockNotice",
+						Position = UDim2.new(0, 10, 0, PAD + TITLE + 2),
+						Size = UDim2.new(1, -20, 0, 38),
+						BackgroundTransparency = 1,
+						ZIndex = 6,
+					}, Panel)
+
+					local LockHeader = New("Frame", {
+						Name = "Header",
+						Position = UDim2.new(0, 0, 0, 0),
+						Size = UDim2.new(1, 0, 0, 15),
+						BackgroundTransparency = 1,
+						ZIndex = 6,
+					}, LockNotice)
+
+					local LockIcon = New("ImageLabel", {
+						Name = "LockIcon",
+						AnchorPoint = Vector2.new(0, 0.5),
+						Position = UDim2.new(0, 0, 0.5, 0),
+						Size = UDim2.new(0, 13, 0, 13),
+						BackgroundTransparency = 1,
+						ImageColor3 = Color3.fromRGB(245, 215, 120),
+						ZIndex = 7,
+					}, LockHeader)
+					ApplyIcon(LockIcon, "lock", 48)
+
+					New("TextLabel", {
+						Name = "LockTitle",
+						AnchorPoint = Vector2.new(0, 0.5),
+						Position = UDim2.new(0, 18, 0.5, 0),
+						Size = UDim2.new(1, -18, 1, 0),
+						BackgroundTransparency = 1,
+						Font = Theme.FontBold,
+						Text = "Donator Feature Locked",
+						TextColor3 = Color3.fromRGB(245, 215, 120),
+						TextSize = 11,
+						TextXAlignment = Enum.TextXAlignment.Left,
+						ZIndex = 7,
+					}, LockHeader)
+
+					New("TextLabel", {
+						Name = "LockSub",
+						Position = UDim2.new(0, 0, 0, 16),
+						Size = UDim2.new(1, 0, 0, 22),
+						BackgroundTransparency = 1,
+						Font = Theme.FontBody,
+						Text = isIndo and "Khusus Donator. Dapatkan key di sociabuzz.com/senaroblox atau Discord dsc.gg/senahub"
+							or "Exclusive to Donators. Get key at sociabuzz.com/senaroblox or Discord dsc.gg/senahub",
+						TextColor3 = Color3.fromRGB(175, 175, 190),
+						TextSize = 10,
+						TextXAlignment = Enum.TextXAlignment.Left,
+						TextWrapped = true,
+						ZIndex = 7,
+					}, LockNotice)
+
+					New("TextButton", {
+						Name = "LockShield",
+						Position = UDim2.new(0, 0, 0, 0),
+						Size = UDim2.new(1, 0, 1, 0),
+						BackgroundTransparency = 1,
+						Text = "",
+						AutoButtonColor = false,
+						Active = true,
+						ZIndex = 50,
+					}, Panel)
+				end
+
 				local Scroll = New("ScrollingFrame", {
 					Name = "List",
-					Position = UDim2.new(0, PAD, 0, PAD + TITLE + (TITLE > 0 and 4 or 0)),
+					Position = UDim2.new(0, PAD, 0, PAD + TITLE + (TITLE > 0 and 4 or 0) + lockExtra),
 					Size = UDim2.new(1, -PAD * 2, 0, listH),
 					BackgroundTransparency = 1,
 					BorderSizePixel = 0,
@@ -6507,7 +6610,7 @@ function Sena:CreateWindow(config)
 					btn.MouseLeave:Connect(function() Elevate() Tween(btn, QUICK, { BackgroundColor3 = r.rest }) end)
 					local clickDebounce = false
 					local function doClick()
-						if clickDebounce or r.entry.disabled then return end
+						if isLocked or clickDebounce or r.entry.disabled then return end
 						clickDebounce = true
 						task.delay(0.35, function() clickDebounce = false end)
 						local fn = r.entry.onClick
@@ -6554,7 +6657,13 @@ function Sena:CreateWindow(config)
 					r.StatusSub.Text = tostring(entry.statusSub or "")
 					r.Status.Visible = hasMid and not narrow
 					r.StatusSub.Visible = hasMid and not narrow
-					if entry.button then
+					if isLocked then
+						r.btn.Visible = true
+						r.badge.Visible = false
+						r.btn.Text = "Locked"
+						r.btn.BackgroundColor3 = Theme.Track
+						r.btn.TextColor3 = Theme.Dim
+					elseif entry.button then
 						r.btn.Visible = true
 						r.badge.Visible = false
 						r.btn.Text = tostring(entry.button)
@@ -6615,7 +6724,7 @@ function Sena:CreateWindow(config)
 					local shownRows = math.clamp(n, 1, visibleRows)
 					local h = n == 0 and 22 or (shownRows * (ROW_H + GAP) - GAP)
 					Scroll.Size = UDim2.new(1, -PAD * 2, 0, h)
-					Panel.Size = UDim2.new(1, 0, 0, PAD + TITLE + (TITLE > 0 and 4 or 0) + h + PAD)
+					Panel.Size = UDim2.new(1, 0, 0, PAD + TITLE + (TITLE > 0 and 4 or 0) + lockExtra + h + PAD)
 				end
 				function handle:Clear() self:Update({}) end
 
