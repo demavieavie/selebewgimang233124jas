@@ -501,6 +501,28 @@ Sena.Theme = Theme
 Sena.Flags = {}
 Sena.Windows = {}
 Sena.Unloaded = false
+Sena.IsDonator = false
+do
+	local ok, val = pcall(function()
+		return (getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true)
+	end)
+	if ok and val then
+		Sena.IsDonator = true
+	end
+end
+
+function Sena:SetDonator(state)
+	Sena.IsDonator = state and true or false
+	if getgenv then getgenv().SenaIsDonator = Sena.IsDonator end
+	if _G then _G.SenaIsDonator = Sena.IsDonator end
+end
+
+local function IsDonator()
+	if Sena and Sena.IsDonator == true then return true end
+	if getgenv and getgenv().SenaIsDonator == true then return true end
+	if _G and _G.SenaIsDonator == true then return true end
+	return false
+end
 
 function Sena:SetTheme(overrides)
 	for key, value in pairs(overrides or {}) do
@@ -1223,6 +1245,75 @@ local function DetectGameName()
 	return "PlaceId " .. tostring(game.PlaceId)
 end
 
+function Sena:CheckDonatorKey(customKey)
+	local rawKey = customKey
+		or (getgenv and (getgenv().SenaKey or (getgenv().SenaDonator and getgenv().SenaDonator.Key)))
+		or (_G and _G.SenaKey)
+	if type(rawKey) ~= "string" or rawKey:gsub("%s+", "") == "" then
+		Sena:SetDonator(false)
+		Sena.DonatorInfo = nil
+		if getgenv then getgenv().SenaDonatorInfo = nil end
+		return false, "no_key"
+	end
+	local key = rawKey:gsub("%s+", ""):upper()
+	local backend = (getgenv and getgenv().SenaBackend) or (Backend or DEFAULT_BACKEND)
+	local api = tostring(backend.Api or "http://56.10.112.179:8080"):gsub("/+$", "")
+	local apiKey = tostring(backend.Key or "sena_20VvixjHsd1OPPwgHYJAstpM")
+	local hwid = ""
+	pcall(function()
+		hwid = (type(gethwid) == "function" and gethwid())
+			or (type(get_device_id) == "function" and get_device_id())
+			or (type(getexecutorname) == "function" and getexecutorname())
+			or (game:GetService("RbxAnalyticsService"):GetClientId())
+			or "unknown"
+	end)
+	local uid = LocalUserId()
+	local place = tostring(game.PlaceId or "")
+	local url = string.format(
+		"%s/key/check?key=%s&license=%s&hwid=%s&uid=%s&place=%s&t=%s",
+		api,
+		HttpService:UrlEncode(apiKey),
+		HttpService:UrlEncode(key),
+		HttpService:UrlEncode(hwid),
+		HttpService:UrlEncode(uid),
+		HttpService:UrlEncode(place),
+		tostring(os.time())
+	)
+	local okH, raw = pcall(function() return game:HttpGet(url, true) end)
+	if okH and raw then
+		local okJ, res = pcall(HttpService.JSONDecode, HttpService, raw)
+		if okJ and type(res) == "table" and res.ok and res.valid then
+			Sena:SetDonator(true)
+			Sena.DonatorInfo = res
+			if getgenv then getgenv().SenaDonatorInfo = res end
+			print(string.format("[SenaLib] Donator key verified: %s (%d days left)", tostring(res.name or key), tonumber(res.days_left or 0)))
+			return true, res
+		else
+			Sena:SetDonator(false)
+			Sena.DonatorInfo = nil
+			if getgenv then getgenv().SenaDonatorInfo = nil end
+			local reason = tostring(res and res.reason or "invalid"):lower()
+			local notifyMsg = "Invalid Key. Running in Free Mode."
+			if reason:find("hwid limit") then
+				notifyMsg = "HWID limit reached (3/3). Running Free Version. Reset in Discord."
+			elseif reason:find("expired") then
+				notifyMsg = "Donator Key expired. Running Free Version."
+			end
+			warn("[SenaLib] " .. notifyMsg)
+			pcall(function()
+				game:GetService("StarterGui"):SetCore("SendNotification", {
+					Title = "Sena - Free Mode",
+					Text = notifyMsg,
+					Duration = 6,
+				})
+			end)
+			return false, reason
+		end
+	end
+	Sena:SetDonator(false)
+	return false, "network_error"
+end
+
 -- One join request row from /sync. Incoming + pending -> Accept/Decline card
 -- (once per id); my own request -> teleport on accept, notify otherwise.
 local function HandleJoinUpdate(this, req)
@@ -1290,11 +1381,15 @@ local function StartBackendLoop(this)
 		-- berhenti kalau Disconnect, atau lib ini di-unload (Window:Destroy).
 		-- CreateWindow berikutnya manggil ConnectBackend lagi buat nyalain ulang.
 		while this.Running and not Sena.Unloaded do
+			local isDon = (getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true) or (Sena and Sena.IsDonator == true)
+			local lic = (getgenv and getgenv().SenaKey) or (_G and _G.SenaKey) or ""
 			local params = {
 				uid = uid,
 				key = this.Key,
 				name = LocalUserName(),
 				display = (LocalPlayer and LocalPlayer.DisplayName) or "",
+				donator = isDon and "1" or "0",
+				lic = tostring(lic or ""),
 				chat_since = this.ChatSince,
 				ann_since = this.AnnSince,
 				dm_since = this.DmSince,
@@ -1510,6 +1605,8 @@ end
 -- GET <api><path> dengan uid/key/name/game/place otomatis. Balik (data|nil, err).
 function Sena:BackendCall(path, params)
 	if not Backend then return nil, "not connected" end
+	local isDon = (getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true) or (Sena and Sena.IsDonator == true)
+	local lic = (getgenv and getgenv().SenaKey) or (_G and _G.SenaKey) or ""
 	local merged = {
 		uid = LocalUserId(),
 		key = Backend.Key,
@@ -1517,6 +1614,8 @@ function Sena:BackendCall(path, params)
 		display = (LocalPlayer and LocalPlayer.DisplayName) or "",
 		game = Backend.Game or "",
 		place = game.PlaceId,
+		donator = isDon and "1" or "0",
+		lic = tostring(lic or ""),
 	}
 	for k, v in pairs(params or {}) do merged[k] = v end
 	local data = HttpGetJson(BackendUrl(path, merged))
@@ -1587,6 +1686,8 @@ function Sena:SendChat(text, room)
 		sendText = tag .. " " .. text
 	end
 
+	local isDon = (getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true) or (Sena and Sena.IsDonator == true)
+	local lic = (getgenv and getgenv().SenaKey) or (_G and _G.SenaKey) or ""
 	local data = HttpGetJson(BackendUrl("/chat/send", {
 		uid = LocalUserId(),
 		key = Backend.Key,
@@ -1594,6 +1695,8 @@ function Sena:SendChat(text, room)
 		game = Backend.Game,
 		text = sendText,
 		room = room,
+		donator = isDon and "1" or "0",
+		lic = tostring(lic or ""),
 	}))
 	if not data then return false, "no response" end
 	if data.ok then return true end
@@ -1678,13 +1781,29 @@ function Sena:CreateWindow(config)
 		Sena:ConnectBackend()
 	end
 
+	-- Auto verify getgenv().SenaKey directly in UI Lib
+	pcall(function()
+		Sena:CheckDonatorKey()
+	end)
+
 	local title      = tostring(config.Title or config[1] or "Sena")
 	local subTitle   = tostring(config.SubTitle or config.Description or config[2] or "")
 	local size       = config.Size or UDim2.fromOffset(680, 452)
 
 	local logo       = config.Logo or ""
 	local discord    = tostring(config.Discord or "dsc.gg/senahub")
-	local version    = tostring(config.Version or "v1.0")
+	local rawVer     = tostring(config.Version or "v1.0")
+	local version    = rawVer
+	if Sena.IsDonator then
+		local days = Sena.DonatorInfo and tonumber(Sena.DonatorInfo.days_left)
+		if not version:find("Donator") then
+			version = version .. " | Donator" .. (days and (" (" .. days .. "d)") or "")
+		end
+	else
+		if not version:find("Free") and not version:find("Donator") then
+			version = version .. " | Free"
+		end
+	end
 	local toggleKey  = config.ToggleKey or Enum.KeyCode.RightControl
 	local sidebarW   = tonumber(config.SidebarWidth) or 142
 
@@ -3046,12 +3165,154 @@ function Sena:CreateWindow(config)
 			local function Hoverable(row)
 				row.MouseEnter:Connect(function()
 					Elevate()
+					if row:FindFirstChild("LockShield") then return end
 					Tween(row, QUICK, { BackgroundColor3 = Theme.ElementHover })
 				end)
 				row.MouseLeave:Connect(function()
 					Elevate()
+					if row:FindFirstChild("LockShield") then return end
 					Tween(row, QUICK, { BackgroundColor3 = Theme.Element })
 				end)
+			end
+
+			local function ApplyLockBadge(Row, TitleLabel, DescLabel, itemTitle, mainControl, SetExtra, Recalculate)
+				-- 1. Dimmed & frosted glass styling for the row ("ngeblur dikit")
+				Row.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+				Row.BackgroundTransparency = 0.35
+				Stroke(Row, Color3.fromRGB(80, 70, 45), 1, 0.45)
+
+				-- 2. Ensure feature name is clearly visible
+				if TitleLabel then
+					TitleLabel.TextColor3 = Theme.Text
+				end
+				if DescLabel then
+					DescLabel.Visible = false
+				end
+
+				-- 3. Dim main control and attach Lucide lock icon to it
+				if mainControl then
+					pcall(function()
+						mainControl.Visible = true
+						if mainControl:IsA("ImageLabel") or mainControl:IsA("ImageButton") then
+							ApplyIcon(mainControl, "lock", 48)
+							mainControl.ImageColor3 = Color3.fromRGB(245, 215, 120)
+							mainControl.ImageTransparency = 0.2
+						else
+							mainControl.BackgroundTransparency = math.clamp(mainControl.BackgroundTransparency + 0.35, 0.4, 0.85)
+							for _, child in ipairs(mainControl:GetDescendants()) do
+								if child:IsA("TextLabel") or child:IsA("TextButton") then
+									child.TextTransparency = 0.5
+								elseif child:IsA("ImageLabel") or child:IsA("ImageButton") then
+									child.ImageTransparency = 0.5
+								elseif child:IsA("GuiObject") then
+									child.BackgroundTransparency = math.clamp(child.BackgroundTransparency + 0.25, 0.4, 0.85)
+								end
+							end
+							local cLock = New("ImageLabel", {
+								Name = "ControlLock",
+								AnchorPoint = Vector2.new(0.5, 0.5),
+								Position = UDim2.new(0.5, 0, 0.5, 0),
+								Size = UDim2.new(0, 12, 0, 12),
+								BackgroundTransparency = 1,
+								ImageColor3 = Color3.fromRGB(245, 215, 120),
+								ZIndex = (mainControl.ZIndex or 1) + 2,
+							}, mainControl)
+							ApplyIcon(cLock, "lock", 48)
+						end
+					end)
+				end
+
+				-- 4. Lock Notice Container inside Row
+				local noticeY = ROW_PAD + TITLE_H + 2
+				local LockNotice = New("Frame", {
+					Name = "LockNotice",
+					Position = UDim2.new(0, 10, 0, noticeY),
+					Size = UDim2.new(1, -20, 0, 32),
+					BackgroundTransparency = 1,
+					ZIndex = 4,
+				}, Row)
+
+				local LockHeader = New("Frame", {
+					Name = "Header",
+					Position = UDim2.new(0, 0, 0, 0),
+					Size = UDim2.new(1, 0, 0, 15),
+					BackgroundTransparency = 1,
+					ZIndex = 4,
+				}, LockNotice)
+
+				local LockIcon = New("ImageLabel", {
+					Name = "LockIcon",
+					AnchorPoint = Vector2.new(0, 0.5),
+					Position = UDim2.new(0, 0, 0.5, 0),
+					Size = UDim2.new(0, 13, 0, 13),
+					BackgroundTransparency = 1,
+					ImageColor3 = Color3.fromRGB(245, 215, 120),
+					ZIndex = 5,
+				}, LockHeader)
+				ApplyIcon(LockIcon, "lock", 48)
+
+				New("TextLabel", {
+					Name = "LockTitle",
+					AnchorPoint = Vector2.new(0, 0.5),
+					Position = UDim2.new(0, 18, 0.5, 0),
+					Size = UDim2.new(1, -18, 1, 0),
+					BackgroundTransparency = 1,
+					Font = Theme.FontBold,
+					Text = "Donator Feature Locked",
+					TextColor3 = Color3.fromRGB(245, 215, 120),
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					ZIndex = 5,
+				}, LockHeader)
+
+				New("TextLabel", {
+					Name = "LockSub",
+					Position = UDim2.new(0, 0, 0, 16),
+					Size = UDim2.new(1, 0, 0, 15),
+					BackgroundTransparency = 1,
+					Font = Theme.FontBody,
+					Text = "is exclusive to Sena Donators. Get your key at sociabuzz.com/senaroblox or dsc.gg/senahub.",
+					TextColor3 = Color3.fromRGB(175, 175, 190),
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextWrapped = true,
+					ZIndex = 5,
+				}, LockNotice)
+
+				-- 5. Expand Row height to comfortably fit the lock banner
+				if SetExtra then
+					SetExtra(36)
+				end
+				if Recalculate then
+					Recalculate()
+				else
+					Row.Size = UDim2.new(1, 0, 0, (ROW_MIN or 40) + 36)
+				end
+
+				-- 6. LockShield to block all clicks / interactions ("fiturnya gabisa dipencet")
+				-- No notification toast ("bukan notif jing")
+				local Shield = New("TextButton", {
+					Name = "LockShield",
+					Position = UDim2.new(0, 0, 0, 0),
+					Size = UDim2.new(1, 0, 1, 0),
+					BackgroundTransparency = 1,
+					Text = "",
+					AutoButtonColor = false,
+					Active = true,
+					ZIndex = 25,
+				}, Row)
+
+				OnTap(Shield, function()
+					Elevate()
+					-- Subtle tactile feedback: gentle border pulse, no toast notification
+					Tween(Row, QUICK, { BackgroundColor3 = Color3.fromRGB(28, 26, 32) })
+					task.delay(0.15, function()
+						Elevate()
+						Tween(Row, QUICK, { BackgroundColor3 = Color3.fromRGB(18, 18, 24) })
+					end)
+				end)
+
+				return Shield, LockNotice
 			end
 
 			local function ClickCatcher(row)
@@ -3250,8 +3511,9 @@ function Sena:CreateWindow(config)
 				local bTitle    = tostring(itemCfg.Title or itemCfg[1] or "Button")
 				local bDesc     = tostring(itemCfg.Description or itemCfg.Content or itemCfg[2] or "")
 				local callback  = itemCfg.Callback or itemCfg[3] or function() end
+				local isLocked  = (itemCfg.Locked == true or itemCfg.Donator == true) and not IsDonator()
 
-				local Row, TitleLabel, _, Recalculate = BuildRow("Button", bTitle, bDesc, 28, 0)
+				local Row, TitleLabel, DescLabel, Recalculate, SetExtra = BuildRow("Button", bTitle, bDesc, 28, 0)
 				Hoverable(Row)
 
 				local Arrow = New("ImageLabel", {
@@ -3263,20 +3525,24 @@ function Sena:CreateWindow(config)
 				}, Row)
 				ApplyIcon(Arrow, "chevron-right", 48)
 
-				local Click = ClickCatcher(Row)
-				OnTap(Click, function()
-					Elevate()
-					Tween(Arrow, QUICK, { Position = UDim2.new(1, -6, 0, ROW_PAD + 1) })
-					task.delay(0.12, function()
+				if isLocked then
+					ApplyLockBadge(Row, TitleLabel, DescLabel, bTitle, Arrow, SetExtra, Recalculate)
+				else
+					local Click = ClickCatcher(Row)
+					OnTap(Click, function()
 						Elevate()
-						Tween(Arrow, QUICK, { Position = UDim2.new(1, -10, 0, ROW_PAD + 1) })
+						Tween(Arrow, QUICK, { Position = UDim2.new(1, -6, 0, ROW_PAD + 1) })
+						task.delay(0.12, function()
+							Elevate()
+							Tween(Arrow, QUICK, { Position = UDim2.new(1, -10, 0, ROW_PAD + 1) })
+						end)
+						task.spawn(function()
+							Elevate()
+							local ok, err = pcall(callback)
+							if not ok then warn("[Sena] Button callback error:", err) end
+						end)
 					end)
-					task.spawn(function()
-						Elevate()
-						local ok, err = pcall(callback)
-						if not ok then warn("[Sena] Button callback error:", err) end
-					end)
-				end)
+				end
 
 				Register(Row, bTitle .. " " .. bDesc)
 
@@ -3290,7 +3556,11 @@ function Sena:CreateWindow(config)
 					if newCfg.Callback then callback = newCfg.Callback end
 					Recalculate()
 				end
-				function funcs:Fire() task.spawn(function() Elevate() callback() end) end
+				function funcs:Fire()
+					if isLocked then return end
+					task.spawn(function() Elevate() callback() end)
+				end
+				function funcs:IsLocked() return isLocked end
 
 				return funcs
 			end
@@ -3302,8 +3572,9 @@ function Sena:CreateWindow(config)
 				local default  = itemCfg.Default or itemCfg[3] or false
 				local callback = itemCfg.Callback or itemCfg[4] or function() end
 				local flag     = itemCfg.Flag
+				local isLocked = (itemCfg.Locked == true or itemCfg.Donator == true) and not IsDonator()
 
-				local Row, TitleLabel, _, Recalculate = BuildRow("Toggle", tTitle, tDesc, 48, 0)
+				local Row, TitleLabel, DescLabel, Recalculate, SetExtra = BuildRow("Toggle", tTitle, tDesc, 48, 0)
 				Hoverable(Row)
 
 				local Switch = New("Frame", {
@@ -3323,10 +3594,11 @@ function Sena:CreateWindow(config)
 				}, Switch)
 				Corner(Knob, 6)
 
-				local value = default and true or false
+				local value = (not isLocked) and (default and true or false) or false
 				local funcs = { Value = value }
 
 				local function Render(animate)
+					if isLocked then return end
 					local info = animate and QUICK or TweenInfo.new(0)
 					Tween(Switch, info, {
 						BackgroundColor3 = value and Theme.Accent or Theme.Track,
@@ -3338,6 +3610,7 @@ function Sena:CreateWindow(config)
 				end
 
 				local function SetValue(newValue, skipCallback)
+					if isLocked then return end
 					Elevate()
 					value = newValue and true or false
 					funcs.Value = value
@@ -3351,19 +3624,24 @@ function Sena:CreateWindow(config)
 					end
 				end
 
-				local Click = ClickCatcher(Row)
-				OnTap(Click, function() SetValue(not value) end)
+				if isLocked then
+					ApplyLockBadge(Row, TitleLabel, DescLabel, tTitle, Switch, SetExtra, Recalculate)
+				else
+					local Click = ClickCatcher(Row)
+					OnTap(Click, function() SetValue(not value) end)
+					Render(false)
+				end
 
-				Render(false)
 				Register(Row, tTitle .. " " .. tDesc)
 
 				function funcs:Set(newValue, skipCallback) SetValue(newValue, skipCallback) end
 				function funcs:Get() return value end
 				function funcs:Toggle() SetValue(not value) end
+				function funcs:IsLocked() return isLocked end
 				Bind(flag, funcs)
 				SaveState(tTitle, itemCfg, funcs)
 
-				if default then
+				if default and not isLocked then
 					task.defer(function() SetValue(true) end)
 				end
 
@@ -3381,8 +3659,9 @@ function Sena:CreateWindow(config)
 				local suffix   = tostring(itemCfg.Suffix or "")
 				local callback = itemCfg.Callback or function() end
 				local flag     = itemCfg.Flag
+				local isLocked = (itemCfg.Locked == true or itemCfg.Donator == true) and not IsDonator()
 
-				local Row, TitleLabel, DescLabel, Recalculate = BuildRow("Slider", sTitle, sDesc, 74, 16)
+				local Row, TitleLabel, DescLabel, Recalculate, SetExtra = BuildRow("Slider", sTitle, sDesc, 74, 16)
 
 				local ValueLabel = New("TextLabel", {
 					AnchorPoint = Vector2.new(1, 0),
@@ -3394,6 +3673,7 @@ function Sena:CreateWindow(config)
 					TextColor3 = Theme.SubText,
 					TextSize = 12,
 					TextXAlignment = Enum.TextXAlignment.Right,
+					Visible = true,
 				}, Row)
 
 				local Bar = New("Frame", {
@@ -3402,6 +3682,7 @@ function Sena:CreateWindow(config)
 					Size = UDim2.new(1, -20, 0, 4),
 					BackgroundColor3 = Theme.Track,
 					BorderSizePixel = 0,
+					Visible = true,
 				}, Row)
 				Corner(Bar, 2)
 
@@ -3434,6 +3715,7 @@ function Sena:CreateWindow(config)
 				end
 
 				local function Render(animate)
+					if isLocked then return end
 					local alpha = (max - min) == 0 and 0 or (value - min) / (max - min)
 					local info = animate and QUICK or TweenInfo.new(0)
 					Tween(Fill, info, { Size = UDim2.new(alpha, 0, 1, 0) })
@@ -3442,6 +3724,7 @@ function Sena:CreateWindow(config)
 				end
 
 				local function SetValue(newValue, skipCallback, animate)
+					if isLocked then return end
 					Elevate()
 					value = Snap(tonumber(newValue) or min)
 					funcs.Value = value
@@ -3455,60 +3738,66 @@ function Sena:CreateWindow(config)
 					end
 				end
 
-				local Hit = New("TextButton", {
-					Name = "Hit",
-					AnchorPoint = Vector2.new(0, 1),
-					Position = UDim2.new(0, 6, 1, -4),
-					Size = UDim2.new(1, -12, 0, 16),
-					BackgroundTransparency = 1,
-					Text = "",
-					AutoButtonColor = false,
-					ZIndex = 5,
-				}, Row)
+				if isLocked then
+					ApplyLockBadge(Row, TitleLabel, DescLabel, sTitle, Bar, SetExtra, Recalculate)
+				else
+					local Hit = New("TextButton", {
+						Name = "Hit",
+						AnchorPoint = Vector2.new(0, 1),
+						Position = UDim2.new(0, 6, 1, -4),
+						Size = UDim2.new(1, -12, 0, 16),
+						BackgroundTransparency = 1,
+						Text = "",
+						AutoButtonColor = false,
+						ZIndex = 5,
+					}, Row)
 
-				local dragging = false
+					local dragging = false
 
-				local function UpdateFromX(x)
-					local trackPos = Bar.AbsolutePosition.X
-					local trackSize = math.max(1, Bar.AbsoluteSize.X)
-					local alpha = math.clamp((x - trackPos) / trackSize, 0, 1)
-					SetValue(min + alpha * (max - min), false, false)
+					local function UpdateFromX(x)
+						local trackPos = Bar.AbsolutePosition.X
+						local trackSize = math.max(1, Bar.AbsoluteSize.X)
+						local alpha = math.clamp((x - trackPos) / trackSize, 0, 1)
+						SetValue(min + alpha * (max - min), false, false)
+					end
+
+					Hit.InputBegan:Connect(function(input)
+						Elevate()
+						if input.UserInputType == Enum.UserInputType.MouseButton1
+							or input.UserInputType == Enum.UserInputType.Touch then
+							dragging = true
+							UpdateFromX(input.Position.X)
+							Tween(Knob, QUICK, { Size = UDim2.new(0, 13, 0, 13) })
+						end
+					end)
+
+					Track(UserInputService.InputChanged:Connect(function(input)
+						Elevate()
+						if not dragging then return end
+						if input.UserInputType == Enum.UserInputType.MouseMovement
+							or input.UserInputType == Enum.UserInputType.Touch then
+							UpdateFromX(input.Position.X)
+						end
+					end))
+
+					Track(UserInputService.InputEnded:Connect(function(input)
+						Elevate()
+						if not dragging then return end
+						if input.UserInputType == Enum.UserInputType.MouseButton1
+							or input.UserInputType == Enum.UserInputType.Touch then
+							dragging = false
+							Tween(Knob, QUICK, { Size = UDim2.new(0, 10, 0, 10) })
+						end
+					end))
+
+					task.defer(function() Render(false) end)
 				end
 
-				Hit.InputBegan:Connect(function(input)
-					Elevate()
-					if input.UserInputType == Enum.UserInputType.MouseButton1
-						or input.UserInputType == Enum.UserInputType.Touch then
-						dragging = true
-						UpdateFromX(input.Position.X)
-						Tween(Knob, QUICK, { Size = UDim2.new(0, 13, 0, 13) })
-					end
-				end)
-
-				Track(UserInputService.InputChanged:Connect(function(input)
-					Elevate()
-					if not dragging then return end
-					if input.UserInputType == Enum.UserInputType.MouseMovement
-						or input.UserInputType == Enum.UserInputType.Touch then
-						UpdateFromX(input.Position.X)
-					end
-				end))
-
-				Track(UserInputService.InputEnded:Connect(function(input)
-					Elevate()
-					if not dragging then return end
-					if input.UserInputType == Enum.UserInputType.MouseButton1
-						or input.UserInputType == Enum.UserInputType.Touch then
-						dragging = false
-						Tween(Knob, QUICK, { Size = UDim2.new(0, 10, 0, 10) })
-					end
-				end))
-
-				task.defer(function() Render(false) end)
 				Register(Row, sTitle .. " " .. sDesc)
 
 				function funcs:Set(newValue, skipCallback) SetValue(newValue, skipCallback) end
 				function funcs:Get() return value end
+				function funcs:IsLocked() return isLocked end
 				Bind(flag, funcs)
 				SaveState(sTitle, itemCfg, funcs)
 
@@ -3525,9 +3814,10 @@ function Sena:CreateWindow(config)
 				local clearOnFocus= itemCfg.ClearOnFocus == true
 				local callback    = itemCfg.Callback or itemCfg[4] or function() end
 				local flag        = itemCfg.Flag
+				local isLocked    = (itemCfg.Locked == true or itemCfg.Donator == true) and not IsDonator()
 
 				local boxWidth = tonumber(itemCfg.Width) or 96
-				local Row, TitleLabel, _, Recalculate = BuildRow("Input", iTitle, iDesc, boxWidth + 16, 0)
+				local Row, TitleLabel, DescLabel, Recalculate, SetExtra = BuildRow("Input", iTitle, iDesc, boxWidth + 16, 0)
 				Hoverable(Row)
 
 				local Box = New("TextBox", {
@@ -3544,6 +3834,7 @@ function Sena:CreateWindow(config)
 					TextSize = 12,
 					TextXAlignment = Enum.TextXAlignment.Left,
 					ClearTextOnFocus = clearOnFocus,
+					Visible = true,
 					ZIndex = 3,
 				}, Row)
 				Corner(Box, 5)
@@ -3554,6 +3845,7 @@ function Sena:CreateWindow(config)
 				local funcs = { Value = value }
 
 				local function Commit(text, skipCallback)
+					if isLocked then return end
 					Elevate()
 					if numeric then
 						local n = tonumber(text)
@@ -3571,20 +3863,25 @@ function Sena:CreateWindow(config)
 					end
 				end
 
-				Box.Focused:Connect(function()
-					Elevate()
-					Tween(Box, QUICK, { BackgroundColor3 = Theme.Backdrop })
-				end)
-				Box.FocusLost:Connect(function(enter)
-					Elevate()
-					Tween(Box, QUICK, { BackgroundColor3 = Theme.Card })
-					Commit(Box.Text, false)
-				end)
+				if isLocked then
+					ApplyLockBadge(Row, TitleLabel, DescLabel, iTitle, Box, SetExtra, Recalculate)
+				else
+					Box.Focused:Connect(function()
+						Elevate()
+						Tween(Box, QUICK, { BackgroundColor3 = Theme.Backdrop })
+					end)
+					Box.FocusLost:Connect(function(enter)
+						Elevate()
+						Tween(Box, QUICK, { BackgroundColor3 = Theme.Card })
+						Commit(Box.Text, false)
+					end)
+				end
 
 				Register(Row, iTitle .. " " .. iDesc)
 
 				function funcs:Set(newValue, skipCallback) Commit(tostring(newValue or ""), skipCallback) end
 				function funcs:Get() return numeric and (tonumber(value) or 0) or value end
+				function funcs:IsLocked() return isLocked end
 				Bind(flag, funcs)
 				SaveState(iTitle, itemCfg, funcs, function() return value end)
 
@@ -3601,8 +3898,9 @@ function Sena:CreateWindow(config)
 				local callback = itemCfg.Callback or function() end
 				local flag     = itemCfg.Flag
 				local maxList  = tonumber(itemCfg.MaxVisible) or (IS_TOUCH and 6 or 5)
+				local isLocked = (itemCfg.Locked == true or itemCfg.Donator == true) and not IsDonator()
 
-				local Row, TitleLabel, _, Recalculate, SetExtra = BuildRow("Dropdown", dTitle, dDesc, 114, 0)
+				local Row, TitleLabel, DescLabel, Recalculate, SetExtra = BuildRow("Dropdown", dTitle, dDesc, 114, 0)
 
 				local Control = New("TextButton", {
 					Name = "Control",
@@ -3613,6 +3911,7 @@ function Sena:CreateWindow(config)
 					BorderSizePixel = 0,
 					Text = "",
 					AutoButtonColor = false,
+					Visible = true,
 					ZIndex = 3,
 				}, Row)
 				Corner(Control, 5)
@@ -3731,6 +4030,7 @@ function Sena:CreateWindow(config)
 				end
 
 				local function SetOpen(state)
+					if isLocked then return end
 					Elevate()
 					isOpen = state and true or false
 					if isOpen and rowsDirty then
@@ -3826,7 +4126,11 @@ function Sena:CreateWindow(config)
 					UpdateLabel()
 				end
 
-				OnTap(Control, function() SetOpen(not isOpen) end)
+				if isLocked then
+					ApplyLockBadge(Row, TitleLabel, DescLabel, dTitle, Control, SetExtra, Recalculate)
+				else
+					OnTap(Control, function() SetOpen(not isOpen) end)
+				end
 
 				do
 					local defaults = {}
@@ -3890,6 +4194,7 @@ function Sena:CreateWindow(config)
 				function funcs:Open() SetOpen(true) end
 				function funcs:Close() SetOpen(false) end
 
+				function funcs:IsLocked() return isLocked end
 				Bind(flag, funcs)
 				SaveState(dTitle, itemCfg, funcs)
 				return funcs
@@ -3902,8 +4207,9 @@ function Sena:CreateWindow(config)
 				local default  = itemCfg.Default
 				local callback = itemCfg.Callback or function() end
 				local flag     = itemCfg.Flag
+				local isLocked = (itemCfg.Locked == true or itemCfg.Donator == true) and not IsDonator()
 
-				local Row, TitleLabel, _, Recalculate = BuildRow("Keybind", kTitle, kDesc, 88, 0)
+				local Row, TitleLabel, DescLabel, Recalculate, SetExtra = BuildRow("Keybind", kTitle, kDesc, 88, 0)
 				Hoverable(Row)
 
 				local Bind = New("TextButton", {
@@ -3917,6 +4223,7 @@ function Sena:CreateWindow(config)
 					TextColor3 = Theme.SubText,
 					TextSize = 12,
 					AutoButtonColor = false,
+					Visible = true,
 					ZIndex = 3,
 				}, Row)
 				Corner(Bind, 5)
@@ -3927,6 +4234,7 @@ function Sena:CreateWindow(config)
 				local funcs = {}
 
 				local function SetKey(keyCode, skipCallback)
+					if isLocked then return end
 					Elevate()
 					if typeof(keyCode) == "string" then
 						local ok, enum = pcall(function() return Enum.KeyCode[keyCode] end)
@@ -3941,38 +4249,44 @@ function Sena:CreateWindow(config)
 					end
 				end
 
-				Bind.MouseButton1Click:Connect(function()
-					Elevate()
-					listening = true
-					Bind.Text = "..."
-					Bind.TextColor3 = Theme.Accent
-				end)
+				if isLocked then
+					ApplyLockBadge(Row, TitleLabel, DescLabel, kTitle, Bind, SetExtra, Recalculate)
+				else
+					Bind.MouseButton1Click:Connect(function()
+						Elevate()
+						listening = true
+						Bind.Text = "..."
+						Bind.TextColor3 = Theme.Accent
+					end)
 
-				Track(UserInputService.InputBegan:Connect(function(input, processed)
-					Elevate()
-					if listening then
-						if input.UserInputType == Enum.UserInputType.Keyboard then
-							listening = false
-							if input.KeyCode == Enum.KeyCode.Backspace then
-								SetKey(nil, true)
-							else
-								SetKey(input.KeyCode, true)
+					Track(UserInputService.InputBegan:Connect(function(input, processed)
+						Elevate()
+						if listening then
+							if input.UserInputType == Enum.UserInputType.Keyboard then
+								listening = false
+								if input.KeyCode == Enum.KeyCode.Backspace then
+									SetKey(nil, true)
+								else
+									SetKey(input.KeyCode, true)
+								end
 							end
+							return
 						end
-						return
-					end
 
-					if processed or not currentKey then return end
-					if input.KeyCode == currentKey then
-						task.spawn(function() Elevate() pcall(callback, currentKey) end)
-					end
-				end))
+						if processed or not currentKey then return end
+						if input.KeyCode == currentKey then
+							task.spawn(function() Elevate() pcall(callback, currentKey) end)
+						end
+					end))
 
-				SetKey(default, true)
+					SetKey(default, true)
+				end
+
 				Register(Row, kTitle .. " " .. kDesc)
 
 				function funcs:Set(keyCode) SetKey(keyCode, true) end
 				function funcs:Get() return currentKey end
+				function funcs:IsLocked() return isLocked end
 				if flag then Sena.Flags[flag] = funcs end
 				SaveState(kTitle, itemCfg, funcs,
 					function() return currentKey and currentKey.Name or "" end,
@@ -4442,7 +4756,12 @@ function Sena:CreateWindow(config)
 					end
 
 					local left = AVATAR + 8
-					local whoText = string.format('<font color="%s">%s</font>', mine and mineHex or Hex(tint), Escape(name))
+					local cleanName = name:gsub("%s*%[DONATOR%]", "")
+					local isDonatorMsg = (msg.donator == true) or (name:find("%[DONATOR%]") ~= nil) or (mine and ((getgenv and getgenv().SenaIsDonator == true) or (Sena and Sena.IsDonator == true)))
+					local whoText = string.format('<font color="%s">%s</font>', mine and mineHex or Hex(tint), Escape(cleanName))
+					if isDonatorMsg then
+						whoText = whoText .. '  <font color="#F5C451"><b>[DONATOR]</b></font>'
+					end
 					if msg.pm then
 						-- private message: gold PM tag, and for my own the recipient
 						whoText = '<font color="#F5C451">PM</font>  ' .. whoText
@@ -5618,6 +5937,7 @@ function Sena:CreateWindow(config)
 				Broadcast = Elements:AddButton({
 					Title = L("Broadcast", "Broadcast: Find Partner"),
 					Content = L("BroadcastDesc", "Tell other players you are waiting at the shrine. Only works if you really own the pet."),
+					Locked = (itemCfg.Locked == true or itemCfg.BroadcastLocked == true),
 					Callback = function()
 						if st.busy then return end
 						st.busy = true
@@ -5877,7 +6197,13 @@ function Sena:CreateWindow(config)
 							row.BackgroundColor3 = Theme.Element
 							Stroke(row, Theme.Stroke, 1)
 						end
-						local who = mine and ('<font color="#4ADE80">' .. L("You", "You") .. '</font>') or tostring(entry.name or "??****")
+						local isLocalDonator = (getgenv and getgenv().SenaIsDonator == true) or (Sena and Sena.IsDonator == true)
+						local isEntryDonator = (entry.donator == true) or (tostring(entry.name or ""):find("%[DONATOR%]") ~= nil)
+						local rawEntryName = tostring(entry.name or "??****"):gsub("%s*%[DONATOR%]", "")
+						local who = mine and ('<font color="#4ADE80">' .. L("You", "You") .. '</font>') or Escape(rawEntryName)
+						if (mine and isLocalDonator) or (not mine and isEntryDonator) then
+							who = who .. '  <font color="#F5C451"><b>[DONATOR]</b></font>'
+						end
 						if mine and entry.state == "claimed" then
 							who = who .. '  <font color="#EAB308">· ' .. tostring(entry.partner or "?") .. " " .. L("RequestingShort", "requesting") .. "</font>"
 						elseif mine and entry.state == "accepted" then
