@@ -527,10 +527,10 @@ Sena.Theme = Theme
 Sena.Flags = {}
 Sena.Windows = {}
 Sena.Unloaded = false
-Sena.IsDonator = false
+Sena._isDonator = false
 Sena.IsTrial = false
 Sena.__FIXED_AUTOLOAD = true
-Sena.BuildVersion = 310
+Sena.BuildVersion = 311
 do
 	local okT, valT = pcall(function()
 		return (getgenv and getgenv().SenaIsTrial == true) or (_G and _G.SenaIsTrial == true)
@@ -542,30 +542,30 @@ do
 		return (getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true)
 	end)
 	if ok and val and not Sena.IsTrial then
-		Sena.IsDonator = true
+		Sena._isDonator = true
 	end
 end
 
 function Sena:SetDonator(state, isTrial)
 	if isTrial then
 		Sena.IsTrial = true
-		Sena.IsDonator = false
+		Sena._isDonator = false
 	else
 		Sena.IsTrial = false
-		Sena.IsDonator = state and true or false
+		Sena._isDonator = (state == true)
 	end
 	if getgenv then
-		getgenv().SenaIsDonator = Sena.IsDonator
+		getgenv().SenaIsDonator = Sena._isDonator
 		getgenv().SenaIsTrial = Sena.IsTrial
 	end
 	if _G then
-		_G.SenaIsDonator = Sena.IsDonator
+		_G.SenaIsDonator = Sena._isDonator
 		_G.SenaIsTrial = Sena.IsTrial
 	end
 end
 
 local function IsDonator()
-	if Sena and (Sena.IsDonator == true or Sena.IsTrial == true) then return true end
+	if Sena and (Sena._isDonator == true or Sena.IsTrial == true) then return true end
 	if getgenv and (getgenv().SenaIsDonator == true or getgenv().SenaIsTrial == true) then return true end
 	if _G and (_G.SenaIsDonator == true or _G.SenaIsTrial == true) then return true end
 	return false
@@ -1447,7 +1447,7 @@ function Sena:CheckDonatorKey(customKey)
 		end
 	end
 	warn("[SenaLib] Network error verifying key, retaining offline status...")
-	if (getgenv and getgenv().SenaIsDonator) or (_G and _G.SenaIsDonator) or (Sena and Sena.IsDonator) then
+	if (getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true) or (Sena and Sena._isDonator == true) then
 		Sena:SetDonator(true)
 		return true, Sena.DonatorInfo or { valid = true, name = "Donator", days_left = 30 }
 	end
@@ -2020,7 +2020,7 @@ function Sena:CreateWindow(config)
 	local discord    = tostring(config.Discord or "discord.gg/senahub")
 	local rawVer     = tostring(config.Version or "v1.0")
 	local version    = rawVer
-	if Sena.IsDonator then
+	if IsDonator() then
 		local days = Sena.DonatorInfo and tonumber(Sena.DonatorInfo.days_left)
 		if not version:find("Donator") then
 			version = version .. " | Donator" .. (days and (" (" .. days .. "d)") or "")
@@ -2803,6 +2803,7 @@ function Sena:CreateWindow(config)
 						end
 					end
 				end
+				self.Pending = nil
 			end)
 
 			return true
@@ -2916,13 +2917,19 @@ function Sena:CreateWindow(config)
 		end
 
 		function ConfigSystem:GetAutoLoad()
-			if not HasFiles then return self.MemoryAutoLoad end
+			if not HasFiles then return Sanitize(self.MemoryAutoLoad) end
 
 			local ok, contents = pcall(function()
 				if isfile(autoLoadPath) then return readfile(autoLoadPath) end
 				return ""
 			end)
-			return ok and Sanitize(contents) or ""
+			local name = ok and Sanitize(contents) or ""
+			if name ~= "" and HasFiles then
+				local exists = false
+				pcall(function() exists = isfile(ConfigPath(name)) end)
+				if not exists then return "" end
+			end
+			return name
 		end
 
 		function ConfigSystem:SetAutoLoad(name, enabled)
@@ -3996,8 +4003,32 @@ function Sena:CreateWindow(config)
 
 				local function SetValue(newValue, skipCallback, instant)
 					if isLocked then return end
+					local parsedValue
+					if type(newValue) == "boolean" then
+						parsedValue = newValue
+					elseif type(newValue) == "string" then
+						local lower = string.lower(newValue)
+						if lower == "true" or lower == "1" then
+							parsedValue = true
+						elseif lower == "false" or lower == "0" then
+							parsedValue = false
+						else
+							return
+						end
+					elseif type(newValue) == "number" then
+						if newValue == 1 then
+							parsedValue = true
+						elseif newValue == 0 then
+							parsedValue = false
+						else
+							return
+						end
+					else
+						return
+					end
+
 					Elevate()
-					value = newValue and true or false
+					value = parsedValue
 					funcs.Value = value
 					Render(not instant)
 					if not skipCallback then
