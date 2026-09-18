@@ -1324,6 +1324,8 @@ function Sena:CheckDonatorKey(customKey)
 		or (_G and (_G.SenaKey or _G.SenaDonatorKey))
 	if (not rawKey or rawKey == "") and isfile and readfile then
 		local keyFiles = {
+			"SenaHUB/sena_key.txt",
+			"SenaHUB/Sena_AutoSave.json",
 			"sena_key.txt",
 			"Sena/sena_key.txt",
 			"SenaKey.txt",
@@ -1417,8 +1419,8 @@ function Sena:CheckDonatorKey(customKey)
 				if writefile then
 					writefile("sena_key.txt", key)
 					if makefolder and isfolder then
-						if not isfolder("Sena") then pcall(makefolder, "Sena") end
-						pcall(writefile, "Sena/sena_key.txt", key)
+						if not isfolder("SenaHUB") then pcall(makefolder, "SenaHUB") end
+						pcall(writefile, "SenaHUB/sena_key.txt", key)
 					end
 				end
 			end)
@@ -2687,7 +2689,7 @@ function Sena:CreateWindow(config)
 
 		local folderTitle = Sanitize(title)
 		local folder = tostring(config.ConfigFolder
-			or ("Sena/" .. (folderTitle ~= "" and folderTitle or "Hub") .. "/" .. gameKey))
+			or ("SenaHUB/" .. (folderTitle ~= "" and folderTitle or "Hub") .. "/" .. gameKey))
 
 		ConfigSystem = {
 			Enabled = config.SaveConfig ~= false,
@@ -8082,6 +8084,8 @@ function Sena:CreateWindow(config)
 					or ""
 				if existingKey == "" and isfile and readfile then
 					local keyFiles = {
+						"SenaHUB/sena_key.txt",
+						"SenaHUB/Sena_AutoSave.json",
 						"sena_key.txt",
 						"Sena/sena_key.txt",
 						"SenaKey.txt",
@@ -8246,8 +8250,8 @@ function Sena:CreateWindow(config)
 								if writefile then
 									writefile("sena_key.txt", enteredKey)
 									if makefolder and isfolder then
-										if not isfolder("Sena") then pcall(makefolder, "Sena") end
-										pcall(writefile, "Sena/sena_key.txt", enteredKey)
+										if not isfolder("SenaHUB") then pcall(makefolder, "SenaHUB") end
+										pcall(writefile, "SenaHUB/sena_key.txt", enteredKey)
 									end
 								end
 							end)
