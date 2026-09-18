@@ -6,6 +6,21 @@ local TextService        = game:GetService("TextService")
 local HttpService        = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
+local function GetLocalPlayer()
+	if LocalPlayer and LocalPlayer.Parent then return LocalPlayer end
+	LocalPlayer = Players.LocalPlayer
+	if not LocalPlayer then
+		local t0 = os.clock()
+		while not LocalPlayer and os.clock() - t0 < 5 do
+			pcall(function()
+				LocalPlayer = Players.LocalPlayer
+			end)
+			if LocalPlayer then break end
+			task.wait(0.1)
+		end
+	end
+	return LocalPlayer or Players.LocalPlayer
+end
 
 -- Touch-only device (HP / tablet tanpa keyboard): window ngisi layar, target
 -- sentuh dibesarin, satu kolom. Desktop ga berubah. Preview di desktop:
@@ -212,7 +227,12 @@ local function GuiParent()
 	end)
 	if okCore and coreGui then return coreGui end
 
-	return LocalPlayer:WaitForChild("PlayerGui")
+	local lp = GetLocalPlayer() or Players.LocalPlayer
+	if lp then
+		local ok, pg = pcall(function() return lp:WaitForChild("PlayerGui", 5) end)
+		if ok and pg then return pg end
+	end
+	return game:GetService("CoreGui")
 end
 
 local function Protect(gui)
@@ -1261,13 +1281,16 @@ local function BackendUrl(path, params)
 end
 
 local function LocalUserId()
-	local ok, id = pcall(function() return LocalPlayer and LocalPlayer.UserId end)
-	return tostring(ok and id or 0)
+	local lp = GetLocalPlayer() or Players.LocalPlayer
+	local ok, id = pcall(function() return lp and lp.UserId end)
+	if ok and id and id ~= 0 then return tostring(id) end
+	return tostring((lp and lp.UserId) or 0)
 end
 
 local function LocalUserName()
-	local ok, name = pcall(function() return LocalPlayer and LocalPlayer.Name end)
-	return tostring(ok and name or "")
+	local lp = GetLocalPlayer() or Players.LocalPlayer
+	local ok, name = pcall(function() return lp and lp.Name end)
+	return tostring(ok and name or (lp and lp.Name) or "")
 end
 
 -- Default kalau loader ga nyetel getgenv().SenaBackend. Nama game diambil
@@ -1289,14 +1312,35 @@ end
 
 function Sena:CheckDonatorKey(customKey)
 	local rawKey = customKey
-		or (getgenv and (getgenv().SenaKey or (getgenv().SenaDonator and getgenv().SenaDonator.Key)))
-		or (_G and _G.SenaKey)
+		or (getgenv and (getgenv().SenaKey or getgenv().SenaDonatorKey or (getgenv().SenaDonator and getgenv().SenaDonator.Key)))
+		or (_G and (_G.SenaKey or _G.SenaDonatorKey))
 	if (not rawKey or rawKey == "") and isfile and readfile then
-		pcall(function()
-			if isfile("sena_key.txt") then
-				rawKey = readfile("sena_key.txt")
+		local keyFiles = {
+			"sena_key.txt",
+			"Sena/sena_key.txt",
+			"SenaKey.txt",
+			"senahub_key.txt",
+			"Sena_AutoSave.json",
+			"Sena/Sena_AutoSave.json",
+		}
+		for _, f in ipairs(keyFiles) do
+			pcall(function()
+				if isfile(f) then
+					local c = readfile(f)
+					if f:find("%.json$") then
+						local okJ, d = pcall(HttpService.JSONDecode, HttpService, c)
+						if okJ and type(d) == "table" and d.donatorKey and #tostring(d.donatorKey) > 0 then
+							rawKey = tostring(d.donatorKey)
+						end
+					elseif c and c:gsub("%s+", "") ~= "" then
+						rawKey = c
+					end
+				end
+			end)
+			if rawKey and rawKey:gsub("%s+", "") ~= "" then
+				break
 			end
-		end)
+		end
 	end
 	if type(rawKey) ~= "string" or rawKey:gsub("%s+", "") == "" then
 		Sena:SetDonator(false)
@@ -1317,6 +1361,12 @@ function Sena:CheckDonatorKey(customKey)
 			or "unknown"
 	end)
 	local uid = LocalUserId()
+	if uid == "0" or uid == "" then
+		local lp = GetLocalPlayer() or Players.LocalPlayer
+		if lp and lp.UserId and lp.UserId ~= 0 then
+			uid = tostring(lp.UserId)
+		end
+	end
 	local place = tostring(game.PlaceId or "")
 	local url = string.format(
 		"%s/key/check?key=%s&license=%s&hwid=%s&uid=%s&place=%s&t=%s",
@@ -1328,13 +1378,42 @@ function Sena:CheckDonatorKey(customKey)
 		HttpService:UrlEncode(place),
 		tostring(os.time())
 	)
-	local okH, raw = pcall(function() return game:HttpGet(url, true) end)
+	local okH, raw
+	for attempt = 1, 3 do
+		okH, raw = pcall(function() return game:HttpGet(url, true) end)
+		if okH and raw and #raw > 0 then
+			break
+		end
+		if attempt < 3 then
+			task.wait(1)
+		end
+	end
 	if okH and raw then
 		local okJ, res = pcall(HttpService.JSONDecode, HttpService, raw)
 		if okJ and type(res) == "table" and res.ok and res.valid then
 			Sena:SetDonator(true)
 			Sena.DonatorInfo = res
-			if getgenv then getgenv().SenaDonatorInfo = res end
+			if getgenv then
+				getgenv().SenaKey = key
+				getgenv().SenaDonatorKey = key
+				getgenv().SenaDonatorInfo = res
+				getgenv().SenaIsDonator = true
+			end
+			if _G then
+				_G.SenaKey = key
+				_G.SenaDonatorKey = key
+				_G.SenaDonatorInfo = res
+				_G.SenaIsDonator = true
+			end
+			pcall(function()
+				if writefile then
+					writefile("sena_key.txt", key)
+					if makefolder and isfolder then
+						if not isfolder("Sena") then pcall(makefolder, "Sena") end
+						pcall(writefile, "Sena/sena_key.txt", key)
+					end
+				end
+			end)
 			print(string.format("[SenaLib] Donator key verified: %s (%d days left)", tostring(res.name or key), tonumber(res.days_left or 0)))
 			return true, res
 		else
@@ -1358,6 +1437,11 @@ function Sena:CheckDonatorKey(customKey)
 			end)
 			return false, reason
 		end
+	end
+	warn("[SenaLib] Network error verifying key, retaining offline status...")
+	if (getgenv and getgenv().SenaIsDonator) or (_G and _G.SenaIsDonator) or (Sena and Sena.IsDonator) then
+		Sena:SetDonator(true)
+		return true, Sena.DonatorInfo or { valid = true, name = "Donator", days_left = 30 }
 	end
 	Sena:SetDonator(false)
 	return false, "network_error"
@@ -1406,7 +1490,10 @@ local function HandleJoinUpdate(this, req)
 				Sena:Notify({ Title = "Request join", Content = tostring(req.to_name or "They") .. " accepted. Joining their server...", Duration = 5 })
 				task.delay(1.2, function()
 					pcall(function()
-						game:GetService("TeleportService"):TeleportToPlaceInstance(place, job, LocalPlayer)
+						local lp = GetLocalPlayer() or LocalPlayer or Players.LocalPlayer
+						if lp then
+							game:GetService("TeleportService"):TeleportToPlaceInstance(place, job, lp)
+						end
 					end)
 				end)
 			end
@@ -1430,14 +1517,16 @@ local function StartBackendLoop(this)
 		-- berhenti kalau Disconnect, atau lib ini di-unload (Window:Destroy).
 		-- CreateWindow berikutnya manggil ConnectBackend lagi buat nyalain ulang.
 		while this.Running and not Sena.Unloaded do
+			if uid == "0" or uid == "" then uid = LocalUserId() end
 			local isTrial = (getgenv and getgenv().SenaIsTrial == true) or (_G and _G.SenaIsTrial == true) or (Sena and Sena.IsTrial == true)
 			local isDon = not isTrial and ((getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true) or (Sena and Sena.IsDonator == true))
 			local lic = (getgenv and getgenv().SenaKey) or (_G and _G.SenaKey) or ""
+			local lp = GetLocalPlayer() or LocalPlayer or Players.LocalPlayer
 			local params = {
 				uid = uid,
 				key = this.Key,
 				name = LocalUserName(),
-				display = (LocalPlayer and LocalPlayer.DisplayName) or "",
+				display = (lp and lp.DisplayName) or "",
 				donator = isDon and "1" or "0",
 				trial = isTrial and "1" or "0",
 				lic = tostring(lic or ""),
@@ -1451,6 +1540,20 @@ local function StartBackendLoop(this)
 			-- fitur lain numpang di poll yang sama (mis. fuse=1), ga bikin loop baru
 			for k, v in pairs(this.Extra) do params[k] = v end
 			local data = HttpGetJson(BackendUrl("/sync", params))
+
+			-- server nandain user ini kena ban/blacklist -> langsung keluarin dari game seketika
+			if data and ((type(data.kick) == "string" and data.kick ~= "") or data.blacklisted) then
+				this.Running = false
+				local kickMsg = (type(data.kick) == "string" and data.kick ~= "") and data.kick or "You've been blacklisted from SENA.\nAppeal at discord.gg/senahub"
+				local p = GetLocalPlayer() or LocalPlayer or Players.LocalPlayer
+				pcall(function()
+					if p then p:Kick(kickMsg) end
+				end)
+				pcall(function()
+					game:GetService("Players").LocalPlayer:Kick(kickMsg)
+				end)
+				return
+			end
 
 			if data and data.ok then
 				failures = 0
@@ -1468,13 +1571,6 @@ local function StartBackendLoop(this)
 					Sena.IsDonator = true
 					if getgenv then getgenv().SenaIsTrial = false; getgenv().SenaIsDonator = true end
 					if _G then _G.SenaIsTrial = false; _G.SenaIsDonator = true end
-				end
-
-				-- server nandain user ini kena ban chat (kata kasar) -> keluarin dari game
-				if type(data.kick) == "string" and data.kick ~= "" then
-					this.Running = false
-					pcall(function() LocalPlayer:Kick(data.kick) end)
-					return
 				end
 				this.ChatTtl = tonumber(data.chat_ttl) or this.ChatTtl
 				this.ChatMax = tonumber(data.chat_max) or this.ChatMax
@@ -1676,7 +1772,7 @@ function Sena:BackendCall(path, params)
 		uid = LocalUserId(),
 		key = Backend.Key,
 		name = LocalUserName(),
-		display = (LocalPlayer and LocalPlayer.DisplayName) or "",
+		display = ((GetLocalPlayer() or LocalPlayer or Players.LocalPlayer) and (GetLocalPlayer() or LocalPlayer or Players.LocalPlayer).DisplayName) or "",
 		game = Backend.Game or "",
 		place = game.PlaceId,
 		donator = isDon and "1" or "0",
@@ -1740,7 +1836,7 @@ local function ParseMessageRoom(msg)
 	return detectedRoom or "general", text
 end
 
-function Sena:SendChat(text, room)
+function Sena:SendChat(text, room, hide)
 	if not Backend then return false, "not connected" end
 	text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
 	if text == "" then return false, "empty" end
@@ -1765,19 +1861,42 @@ function Sena:SendChat(text, room)
 		sendText = tag .. " " .. text
 	end
 
-	local isTrial = (getgenv and getgenv().SenaIsTrial == true) or (_G and _G.SenaIsTrial == true) or (Sena and Sena.IsTrial == true)
-	local isDon = not isTrial and ((getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true) or (Sena and Sena.IsDonator == true))
+	local isOwner = (LocalUserName():lower() == "aevinexyz") or (tostring(LocalUserId()) == "8478064806") or ((getgenv and getgenv().SenaIsOwner == true) or (_G and _G.SenaIsOwner == true) or (Sena and Sena.IsOwner == true))
+	local isTrial = not isOwner and ((getgenv and getgenv().SenaIsTrial == true) or (_G and _G.SenaIsTrial == true) or (Sena and Sena.IsTrial == true))
+	local isDon = not isOwner and not isTrial and ((getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true) or (Sena and Sena.IsDonator == true))
 	local lic = (getgenv and getgenv().SenaKey) or (_G and _G.SenaKey) or ""
+	local isHide = false
+	if not isOwner then
+		if hide ~= nil then
+			isHide = (hide == true or hide == "1" or hide == 1)
+		else
+			if getgenv and getgenv().SenaHideName ~= nil then
+				isHide = (getgenv().SenaHideName == true)
+			elseif _G and _G.SenaHideName ~= nil then
+				isHide = (_G.SenaHideName == true)
+			elseif Sena and Sena.HideName ~= nil then
+				isHide = (Sena.HideName == true)
+			else
+				isHide = true
+			end
+		end
+	end
+
+	local sendName = isOwner and "Sena" or LocalUserName()
+
 	local data = HttpGetJson(BackendUrl("/chat/send", {
 		uid = LocalUserId(),
 		key = Backend.Key,
-		name = LocalUserName(),
+		name = sendName,
 		game = Backend.Game,
 		text = sendText,
 		room = room,
 		donator = isDon and "1" or "0",
 		trial = isTrial and "1" or "0",
+		owner = isOwner and "1" or "0",
+		tier = isOwner and "owner" or (isTrial and "trial" or (isDon and "donator" or "free")),
 		lic = tostring(lic or ""),
+		hide = isHide and "1" or "0",
 	}))
 	if not data then return false, "no response" end
 	if data.ok then return true end
@@ -1793,7 +1912,12 @@ function Sena:SendChat(text, room)
 	elseif err:match("^badword") then
 		local minutes = err:match("^badword:(%d+)") or "?"
 		local reason = "Sena: kata kasar terdeteksi di global chat. Ban " .. minutes .. " menit."
-		task.delay(1.5, function() pcall(function() LocalPlayer:Kick(reason) end) end)
+		task.delay(1.5, function()
+			pcall(function()
+				local p = GetLocalPlayer() or LocalPlayer or Players.LocalPlayer
+				if p then p:Kick(reason) end
+			end)
+		end)
 	end
 	return false, err
 end
@@ -1825,7 +1949,12 @@ function Sena:SendDM(toName, text)
 	if err:match("^badword") then
 		local minutes = err:match("^badword:(%d+)") or "?"
 		local reason = "Sena: kata kasar terdeteksi di chat. Ban " .. minutes .. " menit."
-		task.delay(1.5, function() pcall(function() LocalPlayer:Kick(reason) end) end)
+		task.delay(1.5, function()
+			pcall(function()
+				local p = GetLocalPlayer() or LocalPlayer or Players.LocalPlayer
+				if p then p:Kick(reason) end
+			end)
+		end)
 	end
 	return false, err
 end
@@ -1880,7 +2009,7 @@ function Sena:CreateWindow(config)
 	local size       = config.Size or UDim2.fromOffset(680, 452)
 
 	local logo       = config.Logo or ""
-	local discord    = tostring(config.Discord or "dsc.gg/senahub")
+	local discord    = tostring(config.Discord or "discord.gg/senahub")
 	local rawVer     = tostring(config.Version or "v1.0")
 	local version    = rawVer
 	if Sena.IsDonator then
@@ -2580,17 +2709,46 @@ function Sena:CreateWindow(config)
 			end))
 		end
 
+		local function LookupConfigValue(data, key)
+			if type(data) ~= "table" or not key then return nil end
+			if data[key] ~= nil then return data[key] end
+
+			local lowerKey = string.lower(tostring(key))
+			for k, v in pairs(data) do
+				if string.lower(tostring(k)) == lowerKey then
+					return v
+				end
+			end
+
+			local leaf = tostring(key):match("([^/\\]+)$")
+			if leaf and leaf ~= "" then
+				if data[leaf] ~= nil then return data[leaf] end
+				local lowerLeaf = string.lower(leaf)
+				for k, v in pairs(data) do
+					local kLeaf = tostring(k):match("([^/\\]+)$") or tostring(k)
+					if string.lower(kLeaf) == lowerLeaf then
+						return v
+					end
+				end
+			end
+
+			return nil
+		end
+
 		function ConfigSystem:Register(key, funcs)
 			if not key or key == "" or self.Elements[key] then return end
 
 			self.Elements[key] = funcs
 			table.insert(self.Order, key)
 
-			if self.Pending ~= nil and self.Pending[key] ~= nil then
-				task.spawn(function()
-					Elevate()
-					pcall(funcs.Set, self.Pending[key])
-				end)
+			if self.Pending ~= nil then
+				local pendingVal = LookupConfigValue(self.Pending, key)
+				if pendingVal ~= nil then
+					task.spawn(function()
+						Elevate()
+						pcall(funcs.Set, pendingVal, false, true)
+					end)
+				end
 			end
 		end
 
@@ -2610,16 +2768,23 @@ function Sena:CreateWindow(config)
 			if type(data) ~= "table" then return false end
 			self.Pending = data
 
-			for _, key in ipairs(self.Order) do
-				local funcs = self.Elements[key]
-				local value = data[key]
-				if funcs and value ~= nil then
-					task.spawn(function()
-						Elevate()
-						pcall(funcs.Set, value)
-					end)
+			task.spawn(function()
+				Elevate()
+				local count = 0
+				for _, key in ipairs(self.Order) do
+					local funcs = self.Elements[key]
+					local value = LookupConfigValue(data, key)
+					if funcs and value ~= nil then
+						count = count + 1
+						pcall(function()
+							funcs:Set(value, false, true)
+						end)
+						if count % 6 == 0 then
+							task.wait(0.02)
+						end
+					end
 				end
-			end
+			end)
 
 			return true
 		end
@@ -3380,8 +3545,8 @@ function Sena:CreateWindow(config)
 					Size = UDim2.new(1, 0, 0, 26),
 					BackgroundTransparency = 1,
 					Font = Theme.FontBody,
-					Text = isIndo and "Khusus Donator. Dapatkan key di https://senahub.xyz/key atau Discord dsc.gg/senahub"
-						or "Exclusive to Donators. Get key at https://senahub.xyz/key or Discord dsc.gg/senahub",
+					Text = isIndo and "Khusus Donator. Dapatkan key di https://senahub.xyz/key atau Discord discord.gg/senahub"
+						or "Exclusive to Donators. Get key at https://senahub.xyz/key or Discord discord.gg/senahub",
 					TextColor3 = Color3.fromRGB(175, 175, 190),
 					TextSize = 10,
 					TextXAlignment = Enum.TextXAlignment.Left,
@@ -3763,22 +3928,29 @@ function Sena:CreateWindow(config)
 
 				local function Render(animate)
 					if isLocked then return end
-					local info = animate and QUICK or TweenInfo.new(0)
-					Tween(Switch, info, {
-						BackgroundColor3 = value and Theme.Accent or Theme.Track,
-					})
-					Tween(Knob, info, {
-						Position = value and UDim2.new(1, -15, 0.5, -6) or UDim2.new(0, 3, 0.5, -6),
-						BackgroundColor3 = value and Theme.AccentText or Theme.SubText,
-					})
+					local targetBg = value and Theme.Accent or Theme.Track
+					local targetPos = value and UDim2.new(1, -15, 0.5, -6) or UDim2.new(0, 3, 0.5, -6)
+					local targetKnobBg = value and Theme.AccentText or Theme.SubText
+
+					Switch.BackgroundColor3 = targetBg
+					Knob.Position = targetPos
+					Knob.BackgroundColor3 = targetKnobBg
+
+					if animate then
+						Tween(Switch, QUICK, { BackgroundColor3 = targetBg })
+						Tween(Knob, QUICK, {
+							Position = targetPos,
+							BackgroundColor3 = targetKnobBg,
+						})
+					end
 				end
 
-				local function SetValue(newValue, skipCallback)
+				local function SetValue(newValue, skipCallback, instant)
 					if isLocked then return end
 					Elevate()
 					value = newValue and true or false
 					funcs.Value = value
-					Render(true)
+					Render(not instant)
 					if not skipCallback then
 						task.spawn(function()
 							Elevate()
@@ -3808,7 +3980,7 @@ function Sena:CreateWindow(config)
 
 				Register(Row, tTitle .. " " .. tDesc)
 
-				function funcs:Set(newValue, skipCallback) SetValue(newValue, skipCallback) end
+				function funcs:Set(newValue, skipCallback, instant) SetValue(newValue, skipCallback, instant) end
 				function funcs:Get() return value end
 				function funcs:Toggle() SetValue(not value) end
 				function funcs:IsLocked() return isLocked end
@@ -3891,10 +4063,13 @@ function Sena:CreateWindow(config)
 				local function Render(animate)
 					if isLocked then return end
 					local alpha = (max - min) == 0 and 0 or (value - min) / (max - min)
-					local info = animate and QUICK or TweenInfo.new(0)
-					Tween(Fill, info, { Size = UDim2.new(alpha, 0, 1, 0) })
-					Tween(Knob, info, { Position = UDim2.new(alpha, 0, 0.5, 0) })
+					Fill.Size = UDim2.new(alpha, 0, 1, 0)
+					Knob.Position = UDim2.new(alpha, 0, 0.5, 0)
 					ValueLabel.Text = tostring(value) .. suffix
+					if animate then
+						Tween(Fill, QUICK, { Size = UDim2.new(alpha, 0, 1, 0) })
+						Tween(Knob, QUICK, { Position = UDim2.new(alpha, 0, 0.5, 0) })
+					end
 				end
 
 				local function SetValue(newValue, skipCallback, animate)
@@ -4160,9 +4335,17 @@ function Sena:CreateWindow(config)
 
 				local function SelectedList()
 					local list = {}
+					local seen = {}
 					for _, option in ipairs(options) do
-						if selected[tostring(option)] then
-							table.insert(list, tostring(option))
+						local optStr = tostring(option)
+						if selected[optStr] then
+							table.insert(list, optStr)
+							seen[optStr] = true
+						end
+					end
+					for optStr, isSel in pairs(selected) do
+						if isSel and not seen[optStr] then
+							table.insert(list, optStr)
 						end
 					end
 					return list
@@ -4362,7 +4545,7 @@ function Sena:CreateWindow(config)
 				function funcs:Refresh(newOptions, keepSelection)
 					options = newOptions or {}
 					funcs.Options = options
-					if not keepSelection then selected = {} end
+					if keepSelection == false then selected = {} end
 					rowsDirty = true
 					UpdateLabel()
 					if isOpen then SetOpen(true) end
@@ -4585,7 +4768,7 @@ function Sena:CreateWindow(config)
 					Name = "Title",
 					BackgroundTransparency = 1,
 					Position = UDim2.new(0, 10, 0, 0),
-					Size = UDim2.new(0.34, 0, 0, HEADER_H),
+					Size = UDim2.new(0.24, 0, 0, HEADER_H),
 					Font = Theme.Font,
 					Text = cTitle,
 					TextColor3 = Theme.Text,
@@ -4598,8 +4781,8 @@ function Sena:CreateWindow(config)
 				local ModeBtn = New("TextButton", {
 					Name = "Mode",
 					Active = true,
-					Position = UDim2.new(0.34, 4, 0, 4),
-					Size = UDim2.new(0, 110, 0, HEADER_H - 8),
+					Position = UDim2.new(0.24, 4, 0, 4),
+					Size = UDim2.new(0, 72, 0, HEADER_H - 8),
 					BackgroundColor3 = Theme.Element,
 					BorderSizePixel = 0,
 					Font = Theme.FontBold,
@@ -4613,6 +4796,35 @@ function Sena:CreateWindow(config)
 				}, Row)
 				Corner(ModeBtn, 6)
 				Stroke(ModeBtn, Theme.StrokeSoft, 1)
+
+				local isLocalOwner = (LocalUserName():lower() == "aevinexyz") or (tostring(LocalUserId()) == "8478064806") or ((getgenv and getgenv().SenaIsOwner == true) or (_G and _G.SenaIsOwner == true) or (Sena and Sena.IsOwner == true))
+				local hideName = not isLocalOwner
+				if not isLocalOwner then
+					if getgenv and getgenv().SenaHideName ~= nil then
+						hideName = (getgenv().SenaHideName == true)
+					elseif _G and _G.SenaHideName ~= nil then
+						hideName = (_G.SenaHideName == true)
+					end
+				end
+
+				local HideBtn = New("TextButton", {
+					Name = "HideNameToggle",
+					Active = true,
+					Position = UDim2.new(0.24, 78, 0, 4),
+					Size = UDim2.new(0, 80, 0, HEADER_H - 8),
+					BackgroundColor3 = Theme.Element,
+					BorderSizePixel = 0,
+					Font = Theme.FontBold,
+					RichText = true,
+					Text = hideName and '<font color="#F87171">●</font>  Hidden' or '<font color="#4ADE80">●</font>  Public',
+					TextColor3 = Theme.Text,
+					TextSize = 11,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+					AutoButtonColor = false,
+					ZIndex = 3,
+				}, Row)
+				Corner(HideBtn, 6)
+				local hideStroke = Stroke(HideBtn, Theme.StrokeSoft, 1)
 
 				local OnlineLabel = New("TextLabel", {
 					Name = "Online",
@@ -4748,12 +4960,13 @@ function Sena:CreateWindow(config)
 					BackgroundTransparency = 1,
 				}, Row)
 
-				local SEND_W = 58
+				local SEND_W = 52
+				local TAG_W  = 30
 
 				local Box = New("TextBox", {
 					Name = "Input",
 					Position = UDim2.new(0, 0, 0, 0),
-					Size = UDim2.new(1, -SEND_W - 6, 1, 0),
+					Size = UDim2.new(1, -SEND_W - TAG_W - 8, 1, 0),
 					BackgroundColor3 = Theme.Card,
 					BorderSizePixel = 0,
 					Font = Theme.FontBody,
@@ -4772,6 +4985,23 @@ function Sena:CreateWindow(config)
 				Box.Focused:Connect(function() Elevate() Tween(Box, QUICK, { BackgroundColor3 = Theme.Element }) end)
 				Box.FocusLost:Connect(function() Elevate() Tween(Box, QUICK, { BackgroundColor3 = Theme.Card }) end)
 
+				local TagBtn = New("TextButton", {
+					Name = "TagBtn",
+					AnchorPoint = Vector2.new(1, 0),
+					Position = UDim2.new(1, -SEND_W - 4, 0, 0),
+					Size = UDim2.new(0, TAG_W, 1, 0),
+					BackgroundColor3 = Theme.Card,
+					BorderSizePixel = 0,
+					Font = Theme.FontBold,
+					Text = "@",
+					TextColor3 = Theme.Accent,
+					TextSize = 14,
+					AutoButtonColor = false,
+					ZIndex = 3,
+				}, Bar)
+				Corner(TagBtn, 8)
+				Stroke(TagBtn, Theme.StrokeSoft, 1)
+
 				local Send = New("TextButton", {
 					Name = "Send",
 					AnchorPoint = Vector2.new(1, 0),
@@ -4787,6 +5017,142 @@ function Sena:CreateWindow(config)
 					ZIndex = 3,
 				}, Bar)
 				Corner(Send, 8)
+
+				local UnhiddenUsers = {} -- [username] = { name = string, av = string/number, ts = number }
+
+				local TagDropdown = New("Frame", {
+					Name = "TagDropdown",
+					AnchorPoint = Vector2.new(1, 1),
+					Position = UDim2.new(1, -PAD, 1, -BAR_H - PAD - 4),
+					Size = UDim2.new(0, 210, 0, 150),
+					BackgroundColor3 = Theme.Element,
+					BorderSizePixel = 0,
+					Visible = false,
+					ZIndex = 20,
+				}, Row)
+				Corner(TagDropdown, 8)
+				Stroke(TagDropdown, Theme.Stroke, 1)
+
+				local TagTitle = New("TextLabel", {
+					Name = "TagTitle",
+					BackgroundTransparency = 1,
+					Position = UDim2.new(0, 10, 0, 4),
+					Size = UDim2.new(1, -20, 0, 20),
+					Font = Theme.FontBold,
+					Text = "@ Tag Player (Unhidden)",
+					TextColor3 = Theme.Accent,
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					ZIndex = 21,
+				}, TagDropdown)
+
+				local TagScroll = New("ScrollingFrame", {
+					Name = "TagScroll",
+					Position = UDim2.new(0, 6, 0, 26),
+					Size = UDim2.new(1, -12, 1, -32),
+					BackgroundTransparency = 1,
+					BorderSizePixel = 0,
+					ScrollBarThickness = 2,
+					ScrollBarImageColor3 = Theme.Track,
+					ScrollingDirection = Enum.ScrollingDirection.Y,
+					CanvasSize = UDim2.new(0, 0, 0, 0),
+					AutomaticCanvasSize = Enum.AutomaticSize.Y,
+					ZIndex = 21,
+				}, TagDropdown)
+
+				New("UIListLayout", {
+					Padding = UDim.new(0, 3),
+					SortOrder = Enum.SortOrder.LayoutOrder,
+				}, TagScroll)
+
+				local function PopulateTagDropdown()
+					for _, child in ipairs(TagScroll:GetChildren()) do
+						if child:IsA("GuiObject") then pcall(function() child:Destroy() end) end
+					end
+
+					local list = {}
+					for _, v in pairs(UnhiddenUsers) do
+						table.insert(list, v)
+					end
+					table.sort(list, function(a, b) return (a.ts or 0) > (b.ts or 0) end)
+
+					if #list == 0 then
+						New("TextLabel", {
+							BackgroundTransparency = 1,
+							Size = UDim2.new(1, 0, 0, 50),
+							Font = Theme.FontBody,
+							Text = "No unhidden players in chat yet.\n(Hidden users cannot be tagged)",
+							TextColor3 = Theme.Dim,
+							TextSize = 11,
+							TextWrapped = true,
+							ZIndex = 22,
+						}, TagScroll)
+						return
+					end
+
+					for idx, uInfo in ipairs(list) do
+						local uName = uInfo.name
+						local btn = New("TextButton", {
+							Name = "User_" .. uName,
+							LayoutOrder = idx,
+							Active = true,
+							BackgroundColor3 = Theme.Card,
+							BorderSizePixel = 0,
+							Size = UDim2.new(1, 0, 0, 24),
+							Font = Theme.FontBold,
+							Text = "  @" .. uName,
+							TextColor3 = Theme.Text,
+							TextSize = 11,
+							TextXAlignment = Enum.TextXAlignment.Left,
+							AutoButtonColor = false,
+							ZIndex = 22,
+						}, TagScroll)
+						Corner(btn, 5)
+
+						btn.MouseEnter:Connect(function() Elevate() Tween(btn, QUICK, { BackgroundColor3 = Theme.ElementHover, TextColor3 = Theme.Accent }) end)
+						btn.MouseLeave:Connect(function() Elevate() Tween(btn, QUICK, { BackgroundColor3 = Theme.Card, TextColor3 = Theme.Text }) end)
+
+						local function PickUser()
+							Elevate()
+							TagDropdown.Visible = false
+							local tagStr = "@" .. uName .. " "
+							if not Box.Text:find(tagStr, 1, true) then
+								if Box.Text == "" or Box.Text:sub(-1) == " " then
+									Box.Text = Box.Text .. tagStr
+								else
+									Box.Text = Box.Text .. " " .. tagStr
+								end
+							end
+							Box:CaptureFocus()
+							pcall(function() Box.CursorPosition = #Box.Text + 1 end)
+						end
+						OnTap(btn, PickUser)
+						btn.MouseButton1Click:Connect(PickUser)
+						btn.Activated:Connect(PickUser)
+					end
+				end
+
+				local function ToggleTagDropdown()
+					Elevate()
+					TagDropdown.Visible = not TagDropdown.Visible
+					if TagDropdown.Visible then
+						PopulateTagDropdown()
+						Tween(TagBtn, QUICK, { BackgroundColor3 = Theme.ElementHover, TextColor3 = Theme.AccentText })
+					else
+						Tween(TagBtn, QUICK, { BackgroundColor3 = Theme.Card, TextColor3 = Theme.Accent })
+					end
+				end
+
+				OnTap(TagBtn, ToggleTagDropdown)
+				TagBtn.MouseButton1Click:Connect(ToggleTagDropdown)
+				TagBtn.Activated:Connect(ToggleTagDropdown)
+				TagBtn.MouseEnter:Connect(function() Elevate() Tween(TagBtn, QUICK, { BackgroundColor3 = Theme.ElementHover }) end)
+				TagBtn.MouseLeave:Connect(function()
+					Elevate()
+					if not TagDropdown.Visible then
+						Tween(TagBtn, QUICK, { BackgroundColor3 = Theme.Card, TextColor3 = Theme.Accent })
+					end
+				end)
 
 				local shown = 0
 				local mineHex = Hex(Theme.Accent)
@@ -4862,6 +5228,14 @@ function Sena:CreateWindow(config)
 				local AVATAR = 24
 				local NameToIdCache = {}
 
+				local rainbowOwner = '<font color="#FF2A6D"><b>[</b></font>' ..
+					'<font color="#FF6200"><b>O</b></font>' ..
+					'<font color="#FFAA00"><b>W</b></font>' ..
+					'<font color="#05FFA1"><b>N</b></font>' ..
+					'<font color="#00E5FF"><b>E</b></font>' ..
+					'<font color="#7B2CBF"><b>R</b></font>' ..
+					'<font color="#FF007F"><b>]</b></font>'
+
 				local function AddMessage(msg, overrideText)
 					if not Row.Parent then return end
 					local stick = NearBottom()
@@ -4870,6 +5244,23 @@ function Sena:CreateWindow(config)
 					local mine = msg.mine == true
 					local ts = tonumber(msg.ts) or os.time()
 					local tint = NameColor(name)
+					local rawAv = tostring(msg.av or msg.uid or "")
+					if rawAv == "" and mine then rawAv = tostring(LocalUserId()) end
+
+					local isOwnerMsg = (msg.owner == true)
+						or (msg.tier == "owner")
+						or (name:find("%[OWNER%]") ~= nil)
+						or (name:lower() == "sena")
+						or (name:lower() == "aevinexyz")
+						or (rawAv == "8478064806")
+						or (mine and (LocalUserName():lower() == "aevinexyz" or tostring(LocalUserId()) == "8478064806" or ((getgenv and getgenv().SenaIsOwner == true) or (_G and _G.SenaIsOwner == true) or (Sena and Sena.IsOwner == true))))
+
+					local cleanName = name:gsub("%s*%[DONATOR%]", ""):gsub("%s*%[TRIAL%]", ""):gsub("%s*%[VIP%]", ""):gsub("%s*%[OWNER%]", "")
+					local isHidden = (msg.hidden == true) or (name:find("%*") ~= nil)
+					if isOwnerMsg then
+						cleanName = "Sena"
+						isHidden = false
+					end
 
 					local item = New("Frame", {
 						Name = "Msg",
@@ -4887,7 +5278,7 @@ function Sena:CreateWindow(config)
 
 					local avatar = New("Frame", {
 						Name = "Avatar",
-						BackgroundColor3 = tint,
+						BackgroundColor3 = isOwnerMsg and Color3.fromRGB(255, 42, 109) or tint,
 						BorderSizePixel = 0,
 						Size = UDim2.new(0, AVATAR, 0, AVATAR),
 						ZIndex = 4,
@@ -4897,8 +5288,8 @@ function Sena:CreateWindow(config)
 						BackgroundTransparency = 1,
 						Size = UDim2.new(1, 0, 1, 0),
 						Font = Theme.FontBold,
-						Text = name:sub(1, 1):upper(),
-						TextColor3 = Color3.fromRGB(14, 14, 17),
+						Text = isOwnerMsg and "S" or name:sub(1, 1):upper(),
+						TextColor3 = Color3.fromRGB(255, 255, 255),
 						TextSize = 12,
 						ZIndex = 5,
 					}, avatar)
@@ -4921,12 +5312,11 @@ function Sena:CreateWindow(config)
 						end
 					end
 
-					local av = tostring(msg.av or msg.uid or "")
-					if av == "" and mine then
-						av = LocalUserId()
-					end
-
-					if av:match("^%d+$") and av ~= "0" then
+					local av = rawAv
+					if isOwnerMsg then
+						av = "8478064806"
+						applyHeadshot("8478064806")
+					elseif av:match("^%d+$") and av ~= "0" then
 						applyHeadshot(av)
 					elseif not name:find("%*") and name ~= "" then
 						if NameToIdCache[name] then
@@ -4951,11 +5341,42 @@ function Sena:CreateWindow(config)
 					end
 
 					local left = AVATAR + 8
-					local cleanName = name:gsub("%s*%[DONATOR%]", ""):gsub("%s*%[TRIAL%]", ""):gsub("%s*%[VIP%]", "")
-					local isTrialMsg = (msg.trial == true) or (msg.tier == "trial") or (name:find("%[TRIAL%]") ~= nil) or (mine and ((getgenv and getgenv().SenaIsTrial == true) or (_G and _G.SenaIsTrial == true) or (Sena and Sena.IsTrial == true)))
-					local isDonatorMsg = not isTrialMsg and ((msg.donator == true) or (msg.tier == "donator") or (name:find("%[DONATOR%]") ~= nil) or (mine and ((getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true) or (Sena and Sena.IsDonator == true))))
-					local whoText = string.format('<font color="%s">%s</font>', mine and mineHex or Hex(tint), Escape(cleanName))
-					if isDonatorMsg then
+					if not isHidden and cleanName ~= "" and cleanName:lower() ~= "unknown" then
+						UnhiddenUsers[cleanName] = {
+							name = cleanName,
+							av = isOwnerMsg and "8478064806" or av,
+							ts = ts,
+						}
+					end
+
+					-- Click on message to tag sender (only if unhidden)
+					item.InputBegan:Connect(function(input)
+						if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+							if isHidden then
+								SystemLine("Cannot tag " .. Escape(cleanName) .. " — user has Hide Name ON")
+							else
+								local tagStr = "@" .. cleanName .. " "
+								if not Box.Text:find(tagStr, 1, true) then
+									if Box.Text == "" or Box.Text:sub(-1) == " " then
+										Box.Text = Box.Text .. tagStr
+									else
+										Box.Text = Box.Text .. " " .. tagStr
+									end
+								end
+								Box:CaptureFocus()
+								pcall(function() Box.CursorPosition = #Box.Text + 1 end)
+								SystemLine("Tagged @" .. cleanName)
+							end
+						end
+					end)
+
+					local isTrialMsg = not isOwnerMsg and ((msg.trial == true) or (msg.tier == "trial") or (name:find("%[TRIAL%]") ~= nil) or (mine and ((getgenv and getgenv().SenaIsTrial == true) or (_G and _G.SenaIsTrial == true) or (Sena and Sena.IsTrial == true))))
+					local isDonatorMsg = not isOwnerMsg and not isTrialMsg and ((msg.donator == true) or (msg.tier == "donator") or (name:find("%[DONATOR%]") ~= nil) or (mine and ((getgenv and getgenv().SenaIsDonator == true) or (_G and _G.SenaIsDonator == true) or (Sena and Sena.IsDonator == true))))
+					local whoColor = isOwnerMsg and "#FF3366" or (mine and mineHex or Hex(tint))
+					local whoText = string.format('<font color="%s"><b>%s</b></font>', whoColor, Escape(cleanName))
+					if isOwnerMsg then
+						whoText = whoText .. '  ' .. rainbowOwner
+					elseif isDonatorMsg then
 						whoText = whoText .. '  <font color="#F5C451"><b>[DONATOR]</b></font>'
 					elseif isTrialMsg then
 						whoText = whoText .. '  <font color="#60A5FA"><b>[TRIAL]</b></font>'
@@ -4983,6 +5404,37 @@ function Sena:CreateWindow(config)
 						TextTruncate = Enum.TextTruncate.AtEnd,
 						ZIndex = 4,
 					}, item)
+
+					local rawBody = tostring(overrideText or msg.text or "")
+					local escapedBody = Escape(rawBody)
+					local myUName = LocalUserName()
+					local myDName = (LocalPlayer and LocalPlayer.DisplayName) or myUName
+					local isLocalOwner = (myUName:lower() == "aevinexyz") or (tostring(LocalUserId()) == "8478064806") or ((getgenv and getgenv().SenaIsOwner == true) or (_G and _G.SenaIsOwner == true) or (Sena and Sena.IsOwner == true))
+					local hasMentionedMe = false
+
+					local formattedBody = escapedBody:gsub("@([%w_]+)", function(tagUser)
+						local isMe = (tagUser:lower() == myUName:lower()) or (myDName and tagUser:lower() == myDName:lower()) or (isLocalOwner and tagUser:lower() == "sena")
+						if isMe then
+							hasMentionedMe = true
+							return '<font color="#F5C451"><b>@' .. tagUser .. '</b></font>'
+						else
+							return '<font color="#60A5FA"><b>@' .. tagUser .. '</b></font>'
+						end
+					end)
+
+					if hasMentionedMe and not mine then
+						Stroke(item, Color3.fromRGB(245, 196, 81), 1)
+						item.BackgroundColor3 = Color3.fromRGB(38, 32, 18)
+						item.BackgroundTransparency = 0.15
+						pcall(function()
+							game:GetService("StarterGui"):SetCore("SendNotification", {
+								Title = "Sena Live Chat",
+								Text = tostring(cleanName) .. " mentioned you in #" .. tostring(activeRoom or "general"),
+								Duration = 4,
+							})
+						end)
+					end
+
 					New("TextLabel", {
 						Name = "Body",
 						BackgroundTransparency = 1,
@@ -4990,7 +5442,8 @@ function Sena:CreateWindow(config)
 						Size = UDim2.new(1, -left, 0, 0),
 						AutomaticSize = Enum.AutomaticSize.Y,
 						Font = Theme.FontBody,
-						Text = tostring(overrideText or msg.text or ""),
+						RichText = true,
+						Text = formattedBody,
 						TextColor3 = mine and Theme.Text or Theme.SubText,
 						TextSize = 12,
 						TextWrapped = true,
@@ -5242,9 +5695,28 @@ function Sena:CreateWindow(config)
 				ModeBtn.MouseEnter:Connect(function() Elevate() Tween(ModeBtn, QUICK, { BackgroundColor3 = Theme.ElementHover }) end)
 				ModeBtn.MouseLeave:Connect(function() Elevate() Tween(ModeBtn, QUICK, { BackgroundColor3 = Theme.Element }) end)
 
+				local function UpdateHideBtn()
+					HideBtn.Text = hideName and '<font color="#F87171">●</font>  Hidden' or '<font color="#4ADE80">●</font>  Public'
+				end
+
+				local function ToggleHideName()
+					Elevate()
+					hideName = not hideName
+					if getgenv then getgenv().SenaHideName = hideName end
+					if _G then _G.SenaHideName = hideName end
+					if Sena then Sena.HideName = hideName end
+					UpdateHideBtn()
+					SystemLine("Name visibility: " .. (hideName and "Hidden (Anonymous — others cannot tag you)" or "Public (Real Name — taggable)"))
+				end
+				OnTap(HideBtn, ToggleHideName)
+				HideBtn.MouseEnter:Connect(function() Elevate() Tween(HideBtn, QUICK, { BackgroundColor3 = Theme.ElementHover }) end)
+				HideBtn.MouseLeave:Connect(function() Elevate() Tween(HideBtn, QUICK, { BackgroundColor3 = Theme.Element }) end)
+
 				local function Help()
 					SystemLine("Commands:")
 					SystemLine("/help - this list")
+					SystemLine("/hide or /anon - toggle hiding your name (anonymous mode)")
+					SystemLine("/tag <player> - mention an unhidden player (or click @ button)")
 					SystemLine("/pm <player> [message] - private message (switches you to PM mode)")
 					SystemLine("/global or /gen - switch to General room")
 					SystemLine("/id - switch to Indonesian room")
@@ -5318,6 +5790,42 @@ function Sena:CreateWindow(config)
 							end
 						end)
 						return nil
+					elseif cmd == "hide" or cmd == "anon" or cmd == "incognito" then
+						ToggleHideName()
+						return nil
+					elseif cmd == "unhide" or cmd == "showname" then
+						if hideName then ToggleHideName() end
+						return nil
+					elseif cmd == "tag" or cmd == "mention" then
+						local target = rest:match("^(%S+)")
+						if not target or target == "" then
+							ToggleTagDropdown()
+							return nil
+						end
+						target = target:gsub("^@", "")
+						local found = nil
+						for uName, _ in pairs(UnhiddenUsers) do
+							if uName:lower() == target:lower() then
+								found = uName
+								break
+							end
+						end
+						if found then
+							local tagStr = "@" .. found .. " "
+							if not Box.Text:find(tagStr, 1, true) then
+								if Box.Text == "" or Box.Text:sub(-1) == " " then
+									Box.Text = Box.Text .. tagStr
+								else
+									Box.Text = Box.Text .. " " .. tagStr
+								end
+							end
+							Box:CaptureFocus()
+							pcall(function() Box.CursorPosition = #Box.Text + 1 end)
+							SystemLine("Tagged @" .. found)
+						else
+							SystemLine("Player '" .. target .. "' not found or has Hide Name ON")
+						end
+						return nil
 					elseif cmd == "accept" or cmd == "decline" or cmd == "deny" then
 						if not lastIncoming then
 							SystemLine("No join request waiting")
@@ -5372,7 +5880,7 @@ function Sena:CreateWindow(config)
 						if mode == "pm" then
 							ok, err = Sena:SendDM(pmTarget, text)
 						else
-							ok, err = Sena:SendChat(text, sendRoom)
+							ok, err = Sena:SendChat(text, sendRoom, hideName)
 						end
 						if ok then
 							lastSent = os.clock()
@@ -5814,13 +6322,20 @@ function Sena:CreateWindow(config)
 					ConfigSystem.AutoLoaded = true
 					local pick = ConfigSystem:GetAutoLoad()
 					if pick ~= "" then
-						task.defer(function()
+						task.spawn(function()
 							Elevate()
-							task.wait(0.35)
+							if not game:IsLoaded() then
+								pcall(function() game.Loaded:Wait() end)
+							end
+							local lp = game:GetService("Players").LocalPlayer
+							if lp and not lp.Character then
+								pcall(function() lp.CharacterAdded:Wait() end)
+							end
+							task.wait(0.8)
 							if ConfigSystem:Load(pick) then
 								if NameInput then NameInput:Set(pick, true) end
 								RefreshList(pick)
-								Sena:Notify({ Title = "Auto loaded", Content = pick, Icon = "folder-open" })
+								Sena:Notify({ Title = "Auto loaded", Content = pick, Icon = "folder-open", Duration = 3 })
 							end
 						end)
 					end
@@ -6645,8 +7160,8 @@ function Sena:CreateWindow(config)
 						Size = UDim2.new(1, 0, 0, 22),
 						BackgroundTransparency = 1,
 						Font = Theme.FontBody,
-						Text = isIndo and "Khusus Donator. Dapatkan key di https://senahub.xyz/key atau Discord dsc.gg/senahub"
-							or "Exclusive to Donators. Get key at https://senahub.xyz/key or Discord dsc.gg/senahub",
+						Text = isIndo and "Khusus Donator. Dapatkan key di https://senahub.xyz/key atau Discord discord.gg/senahub"
+							or "Exclusive to Donators. Get key at https://senahub.xyz/key or Discord discord.gg/senahub",
 						TextColor3 = Color3.fromRGB(175, 175, 190),
 						TextSize = 10,
 						TextXAlignment = Enum.TextXAlignment.Left,
@@ -6931,32 +7446,47 @@ function Sena:CreateWindow(config)
 
 			function Elements:AddSupportCard(itemCfg)
 				itemCfg = itemCfg or {}
-				local sTitle      = tostring(itemCfg.Title or "Get Key & Support")
+				local sTitle      = tostring(itemCfg.Title or "Get Key & Support Sena")
 				local sDesc       = tostring(itemCfg.Description or itemCfg.Content
-					or "Support this project or get a free 12-hour key via checkpoints. Complete verification at senahub.xyz/key.")
-				local donateUrl   = tostring(itemCfg.Url or itemCfg.Link or "https://senahub.xyz/key")
-				local buttonLabel = tostring(itemCfg.ButtonText or "Get Key")
+					or "Complete checkpoint verification at senahub.xyz/key for free 12h access, or upgrade to Donator VIP for permanent execution and zero wait.")
+				local freeKeyUrl  = "https://senahub.xyz/key"
+				local donateUrl   = tostring(itemCfg.Url or itemCfg.Link or "https://sociabuzz.com/senaroblox/tribe")
+				local discordUrl  = "https://discord.gg/senahub"
 
 				itemOrder = itemOrder + 1
 
 				local Card = New("Frame", {
 					Name = "SupportCard",
 					LayoutOrder = itemOrder,
-					BackgroundColor3 = Theme.Element,
+					BackgroundColor3 = Theme.Card or Color3.fromRGB(19, 19, 23),
 					BorderSizePixel = 0,
 					Size = UDim2.new(1, 0, 0, 0),
 					AutomaticSize = Enum.AutomaticSize.Y,
 					ClipsDescendants = true,
 				}, BodyList)
 				Corner(Card, 8)
-				Stroke(Card, Theme.Stroke, 1)
-				Padding(Card, 10, 10, 10, 10)
+				Stroke(Card, Theme.StrokeSoft or Color3.fromRGB(36, 36, 44), 1)
+				Padding(Card, 12, 12, 12, 12)
 
 				local Layout = New("UIListLayout", {
-					Padding = UDim.new(0, 8),
+					Padding = UDim.new(0, 10),
 					SortOrder = Enum.SortOrder.LayoutOrder,
 					HorizontalAlignment = Enum.HorizontalAlignment.Center,
 				}, Card)
+
+				-- Header
+				local HeaderFrame = New("Frame", {
+					Name = "HeaderFrame",
+					LayoutOrder = 1,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 0),
+					AutomaticSize = Enum.AutomaticSize.Y,
+				}, Card)
+				local HeaderLayout = New("UIListLayout", {
+					Padding = UDim.new(0, 4),
+					SortOrder = Enum.SortOrder.LayoutOrder,
+					HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				}, HeaderFrame)
 
 				local Title = New("TextLabel", {
 					Name = "Title",
@@ -6966,11 +7496,11 @@ function Sena:CreateWindow(config)
 					AutomaticSize = Enum.AutomaticSize.Y,
 					Font = Theme.FontBold,
 					Text = sTitle,
-					TextColor3 = Theme.Text,
+					TextColor3 = Theme.Text or Color3.fromRGB(240, 240, 245),
 					TextSize = 14,
 					TextXAlignment = Enum.TextXAlignment.Center,
 					TextWrapped = true,
-				}, Card)
+				}, HeaderFrame)
 
 				local Desc = New("TextLabel", {
 					Name = "Desc",
@@ -6980,25 +7510,413 @@ function Sena:CreateWindow(config)
 					AutomaticSize = Enum.AutomaticSize.Y,
 					Font = Theme.FontBody,
 					Text = sDesc,
-					TextColor3 = Theme.SubText,
-					TextSize = 12,
+					TextColor3 = Theme.SubText or Color3.fromRGB(150, 150, 160),
+					TextSize = 11,
 					TextXAlignment = Enum.TextXAlignment.Center,
 					TextWrapped = true,
-				}, Card)
+				}, HeaderFrame)
 
-				-- Dedicated Key Input Container (replaces static QR frame)
+				-- Pricing Grid Container (Monochrome 2 Tiles Side-by-Side)
+				local PricingContainer = New("Frame", {
+					Name = "PricingContainer",
+					LayoutOrder = 2,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 0),
+					AutomaticSize = Enum.AutomaticSize.Y,
+				}, Card)
+				local PricingLayout = New("UIListLayout", {
+					FillDirection = Enum.FillDirection.Horizontal,
+					Padding = UDim.new(0, 8),
+					SortOrder = Enum.SortOrder.LayoutOrder,
+					HorizontalAlignment = Enum.HorizontalAlignment.Center,
+					VerticalAlignment = Enum.VerticalAlignment.Top,
+				}, PricingContainer)
+
+				-- Tier 1: 7 Days
+				local Tier1 = New("Frame", {
+					Name = "Tier1",
+					LayoutOrder = 1,
+					BackgroundColor3 = Theme.Backdrop or Color3.fromRGB(13, 13, 16),
+					BorderSizePixel = 0,
+					Size = UDim2.new(0.5, -4, 0, 0),
+					AutomaticSize = Enum.AutomaticSize.Y,
+				}, PricingContainer)
+				Corner(Tier1, 6)
+				Stroke(Tier1, Theme.StrokeSoft or Color3.fromRGB(36, 36, 44), 1)
+				Padding(Tier1, 10, 10, 10, 10)
+
+				local Tier1Layout = New("UIListLayout", {
+					Padding = UDim.new(0, 3),
+					SortOrder = Enum.SortOrder.LayoutOrder,
+					HorizontalAlignment = Enum.HorizontalAlignment.Left,
+				}, Tier1)
+
+				local T1Badge = New("TextLabel", {
+					Name = "T1Badge",
+					LayoutOrder = 1,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 14),
+					Font = Theme.FontBold,
+					Text = "7 DAYS ACCESS",
+					TextColor3 = Theme.SubText or Color3.fromRGB(150, 150, 160),
+					TextSize = 10,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}, Tier1)
+
+				local T1Price = New("TextLabel", {
+					Name = "T1Price",
+					LayoutOrder = 2,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 20),
+					Font = Theme.FontBold,
+					Text = "$1.00 USD",
+					TextColor3 = Theme.Text or Color3.fromRGB(240, 240, 245),
+					TextSize = 15,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}, Tier1)
+
+				local T1Sub = New("TextLabel", {
+					Name = "T1Sub",
+					LayoutOrder = 3,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 14),
+					Font = Theme.FontBody,
+					Text = "Rp 15.000 / Weekly Access",
+					TextColor3 = Theme.Dim or Color3.fromRGB(120, 120, 130),
+					TextSize = 10,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}, Tier1)
+
+				-- Tier 2: 30 Days
+				local Tier2 = New("Frame", {
+					Name = "Tier2",
+					LayoutOrder = 2,
+					BackgroundColor3 = Theme.Backdrop or Color3.fromRGB(13, 13, 16),
+					BorderSizePixel = 0,
+					Size = UDim2.new(0.5, -4, 0, 0),
+					AutomaticSize = Enum.AutomaticSize.Y,
+				}, PricingContainer)
+				Corner(Tier2, 6)
+				Stroke(Tier2, Theme.Stroke or Color3.fromRGB(48, 48, 58), 1)
+				Padding(Tier2, 10, 10, 10, 10)
+
+				local Tier2Layout = New("UIListLayout", {
+					Padding = UDim.new(0, 3),
+					SortOrder = Enum.SortOrder.LayoutOrder,
+					HorizontalAlignment = Enum.HorizontalAlignment.Left,
+				}, Tier2)
+
+				local T2Badge = New("TextLabel", {
+					Name = "T2Badge",
+					LayoutOrder = 1,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 14),
+					Font = Theme.FontBold,
+					Text = "30 DAYS ACCESS",
+					TextColor3 = Theme.SubText or Color3.fromRGB(150, 150, 160),
+					TextSize = 10,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}, Tier2)
+
+				local T2Price = New("TextLabel", {
+					Name = "T2Price",
+					LayoutOrder = 2,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 20),
+					Font = Theme.FontBold,
+					Text = "$2.00 USD",
+					TextColor3 = Theme.Text or Color3.fromRGB(240, 240, 245),
+					TextSize = 15,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}, Tier2)
+
+				local T2Sub = New("TextLabel", {
+					Name = "T2Sub",
+					LayoutOrder = 3,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 14),
+					Font = Theme.FontBody,
+					Text = "Rp 30.000 / Monthly (Stacks)",
+					TextColor3 = Theme.Dim or Color3.fromRGB(120, 120, 130),
+					TextSize = 10,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}, Tier2)
+
+				-- Donator VIP Benefits Container
+				local BenefitsBox = New("Frame", {
+					Name = "BenefitsBox",
+					LayoutOrder = 3,
+					BackgroundColor3 = Theme.Backdrop or Color3.fromRGB(13, 13, 16),
+					BorderSizePixel = 0,
+					Size = UDim2.new(1, 0, 0, 0),
+					AutomaticSize = Enum.AutomaticSize.Y,
+				}, Card)
+				Corner(BenefitsBox, 6)
+				Stroke(BenefitsBox, Theme.StrokeSoft or Color3.fromRGB(36, 36, 44), 1)
+				Padding(BenefitsBox, 10, 10, 10, 10)
+
+				local BenefitsLayout = New("UIListLayout", {
+					Padding = UDim.new(0, 5),
+					SortOrder = Enum.SortOrder.LayoutOrder,
+					HorizontalAlignment = Enum.HorizontalAlignment.Left,
+				}, BenefitsBox)
+
+				local BenTitle = New("TextLabel", {
+					Name = "BenTitle",
+					LayoutOrder = 1,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 16),
+					Font = Theme.FontBold,
+					Text = "DONATOR VIP BENEFITS:",
+					TextColor3 = Theme.Text or Color3.fromRGB(220, 220, 230),
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}, BenefitsBox)
+
+				local function AddBenefit(order, title, desc)
+					local row = New("TextLabel", {
+						Name = "Ben_" .. tostring(order),
+						LayoutOrder = order,
+						BackgroundTransparency = 1,
+						Size = UDim2.new(1, 0, 0, 0),
+						AutomaticSize = Enum.AutomaticSize.Y,
+						RichText = true,
+						Font = Theme.FontBody,
+						Text = string.format("• <b>%s</b> — %s", title, desc),
+						TextColor3 = Theme.SubText or Color3.fromRGB(175, 175, 185),
+						TextSize = 10,
+						TextWrapped = true,
+						TextXAlignment = Enum.TextXAlignment.Left,
+						LineHeight = 1.25,
+					}, BenefitsBox)
+					return row
+				end
+
+				AddBenefit(2, "Early Updates", "Get immediate first access to upcoming scripts, game updates, and bypasses before public release.")
+				AddBenefit(3, "More Features Unlocked", "Unlock premium execution modules, faster configurations, and donator-only features.")
+				AddBenefit(4, "Suggestion Priority", "Have your script suggestions, feature requests, and bug reports prioritized by devs.")
+				AddBenefit(5, "Private Key & Multi-Device", "Dedicated key with up to 3 HWID slots and self-service reset tools.")
+
+				-- Tutorial Container (Monochrome)
+				local TutorialBox = New("Frame", {
+					Name = "TutorialBox",
+					LayoutOrder = 4,
+					BackgroundColor3 = Theme.Backdrop or Color3.fromRGB(13, 13, 16),
+					BorderSizePixel = 0,
+					Size = UDim2.new(1, 0, 0, 0),
+					AutomaticSize = Enum.AutomaticSize.Y,
+				}, Card)
+				Corner(TutorialBox, 6)
+				Stroke(TutorialBox, Theme.StrokeSoft or Color3.fromRGB(36, 36, 44), 1)
+				Padding(TutorialBox, 10, 10, 10, 10)
+
+				local TutorialLayout = New("UIListLayout", {
+					Padding = UDim.new(0, 5),
+					SortOrder = Enum.SortOrder.LayoutOrder,
+					HorizontalAlignment = Enum.HorizontalAlignment.Left,
+				}, TutorialBox)
+
+				local TutTitle = New("TextLabel", {
+					Name = "TutTitle",
+					LayoutOrder = 1,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 16),
+					Font = Theme.FontBold,
+					Text = "HOW TO GET YOUR KEY:",
+					TextColor3 = Theme.Text or Color3.fromRGB(220, 220, 230),
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}, TutorialBox)
+
+				local function MakeStep(order, stepNum, text, isWarn)
+					local row = New("Frame", {
+						Name = "Step" .. tostring(stepNum),
+						LayoutOrder = order,
+						BackgroundTransparency = 1,
+						Size = UDim2.new(1, 0, 0, 0),
+						AutomaticSize = Enum.AutomaticSize.Y,
+					}, TutorialBox)
+					local rLayout = New("UIListLayout", {
+						FillDirection = Enum.FillDirection.Horizontal,
+						Padding = UDim.new(0, 6),
+						SortOrder = Enum.SortOrder.LayoutOrder,
+						VerticalAlignment = Enum.VerticalAlignment.Top,
+					}, row)
+
+					local sBadge = New("Frame", {
+						Name = "Badge",
+						LayoutOrder = 1,
+						BackgroundColor3 = Color3.fromRGB(28, 28, 34),
+						BorderSizePixel = 0,
+						Size = UDim2.new(0, 18, 0, 18),
+					}, row)
+					Corner(sBadge, 4)
+					Stroke(sBadge, Color3.fromRGB(48, 48, 58), 1)
+
+					local sNum = New("TextLabel", {
+						Name = "Num",
+						BackgroundTransparency = 1,
+						Size = UDim2.new(1, 0, 1, 0),
+						Font = Theme.FontBold,
+						Text = tostring(stepNum),
+						TextColor3 = Color3.fromRGB(200, 200, 210),
+						TextSize = 10,
+						TextXAlignment = Enum.TextXAlignment.Center,
+						TextYAlignment = Enum.TextYAlignment.Center,
+					}, sBadge)
+
+					local sText = New("TextLabel", {
+						Name = "Text",
+						LayoutOrder = 2,
+						BackgroundTransparency = 1,
+						Size = UDim2.new(1, -24, 0, 0),
+						AutomaticSize = Enum.AutomaticSize.Y,
+						RichText = true,
+						Font = isWarn and Theme.FontBold or Theme.FontBody,
+						Text = text,
+						TextColor3 = isWarn and Color3.fromRGB(235, 235, 245) or (Theme.SubText or Color3.fromRGB(165, 165, 175)),
+						TextSize = 10,
+						TextWrapped = true,
+						TextXAlignment = Enum.TextXAlignment.Left,
+						LineHeight = 1.25,
+					}, row)
+					return row
+				end
+
+				MakeStep(2, 1, "Join our official Discord community at <b>discord.gg/senahub</b>", false)
+				MakeStep(3, 2, "Go to the <b>「💖」donator-tutorial</b> channel", false)
+				MakeStep(4, 3, "Open the SociaBuzz link (<b>sociabuzz.com/senaroblox/tribe</b>)", false)
+				MakeStep(5, 4, "<b>IMPORTANT:</b> In the \"Nama (Name)\" field, enter your exact <b>Discord username</b>", true)
+				MakeStep(6, 5, "Sena Bot will automatically DM your private license key and grant VIP role", false)
+
+				-- Action Buttons Container (Monochrome dark/slate buttons)
+				local ActionContainer = New("Frame", {
+					Name = "ActionContainer",
+					LayoutOrder = 5,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 0),
+					AutomaticSize = Enum.AutomaticSize.Y,
+				}, Card)
+				local ActionLayout = New("UIListLayout", {
+					Padding = UDim.new(0, 6),
+					SortOrder = Enum.SortOrder.LayoutOrder,
+					HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				}, ActionContainer)
+
+				-- Free Key Button (Full Width)
+				local FreeKeyBtn = New("TextButton", {
+					Name = "FreeKeyBtn",
+					LayoutOrder = 1,
+					Active = true,
+					Size = UDim2.new(1, 0, 0, 30),
+					BackgroundColor3 = Color3.fromRGB(28, 28, 34),
+					BorderSizePixel = 0,
+					Font = Theme.FontBold,
+					Text = "Get Free Key (12h Access via Checkpoint)",
+					TextColor3 = Theme.Text or Color3.fromRGB(235, 235, 245),
+					TextSize = 11,
+					AutoButtonColor = false,
+				}, ActionContainer)
+				Corner(FreeKeyBtn, 6)
+				Stroke(FreeKeyBtn, Theme.Stroke or Color3.fromRGB(48, 48, 58), 1)
+
+				-- Dual Action Row: Join Discord & SociaBuzz
+				local SubActionRow = New("Frame", {
+					Name = "SubActionRow",
+					LayoutOrder = 2,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 30),
+				}, ActionContainer)
+				local SubLayout = New("UIListLayout", {
+					FillDirection = Enum.FillDirection.Horizontal,
+					Padding = UDim.new(0, 6),
+					SortOrder = Enum.SortOrder.LayoutOrder,
+				}, SubActionRow)
+
+				local DiscordBtn = New("TextButton", {
+					Name = "DiscordBtn",
+					LayoutOrder = 1,
+					Active = true,
+					Size = UDim2.new(0.5, -3, 1, 0),
+					BackgroundColor3 = Color3.fromRGB(24, 24, 28),
+					BorderSizePixel = 0,
+					Font = Theme.FontBold,
+					Text = "Join Discord",
+					TextColor3 = Theme.Text or Color3.fromRGB(220, 220, 230),
+					TextSize = 11,
+					AutoButtonColor = false,
+				}, SubActionRow)
+				Corner(DiscordBtn, 6)
+				Stroke(DiscordBtn, Theme.StrokeSoft or Color3.fromRGB(40, 40, 48), 1)
+
+				local SociaBtn = New("TextButton", {
+					Name = "SociaBtn",
+					LayoutOrder = 2,
+					Active = true,
+					Size = UDim2.new(0.5, -3, 1, 0),
+					BackgroundColor3 = Color3.fromRGB(24, 24, 28),
+					BorderSizePixel = 0,
+					Font = Theme.FontBold,
+					Text = "Get VIP (SociaBuzz)",
+					TextColor3 = Theme.Text or Color3.fromRGB(220, 220, 230),
+					TextSize = 11,
+					AutoButtonColor = false,
+				}, SubActionRow)
+				Corner(SociaBtn, 6)
+				Stroke(SociaBtn, Theme.StrokeSoft or Color3.fromRGB(40, 40, 48), 1)
+
+				local function BindHover(btn)
+					btn.MouseEnter:Connect(function()
+						Elevate()
+						Tween(btn, QUICK, { BackgroundColor3 = Color3.fromRGB(38, 38, 46) })
+					end)
+					btn.MouseLeave:Connect(function()
+						Elevate()
+						Tween(btn, QUICK, { BackgroundColor3 = (btn == FreeKeyBtn and Color3.fromRGB(28, 28, 34) or Color3.fromRGB(24, 24, 28)) })
+					end)
+				end
+				BindHover(FreeKeyBtn)
+				BindHover(DiscordBtn)
+				BindHover(SociaBtn)
+
+				local function CopyAction(url, btn, origText, successText)
+					Elevate()
+					CopyToClipboard(url)
+					if openurl then pcall(openurl, url) end
+					Sena:Notify({
+						Title = "Link Copied",
+						Content = "Copied to clipboard: " .. url,
+						Icon = "check",
+						Duration = 4,
+					})
+					btn.Text = successText
+					task.delay(2.5, function()
+						if btn and btn.Parent then btn.Text = origText end
+					end)
+				end
+
+				OnTap(FreeKeyBtn, function() CopyAction(freeKeyUrl, FreeKeyBtn, "Get Free Key (12h Access via Checkpoint)", "Copied Key Link! ✓") end)
+				FreeKeyBtn.MouseButton1Click:Connect(function() CopyAction(freeKeyUrl, FreeKeyBtn, "Get Free Key (12h Access via Checkpoint)", "Copied Key Link! ✓") end)
+
+				OnTap(DiscordBtn, function() CopyAction(discordUrl, DiscordBtn, "Join Discord", "Copied Discord Link! ✓") end)
+				DiscordBtn.MouseButton1Click:Connect(function() CopyAction(discordUrl, DiscordBtn, "Join Discord", "Copied Discord Link! ✓") end)
+
+				OnTap(SociaBtn, function() CopyAction(donateUrl, SociaBtn, "Get VIP (SociaBuzz)", "Copied SociaBuzz Link! ✓") end)
+				SociaBtn.MouseButton1Click:Connect(function() CopyAction(donateUrl, SociaBtn, "Get VIP (SociaBuzz)", "Copied SociaBuzz Link! ✓") end)
+
+				-- Dedicated Key Input Container (Monochrome)
 				local KeyContainer = New("Frame", {
 					Name = "KeyContainer",
-					LayoutOrder = 3,
-					BackgroundColor3 = Theme.Backdrop or Color3.fromRGB(15, 15, 20),
+					LayoutOrder = 6,
+					BackgroundColor3 = Theme.Backdrop or Color3.fromRGB(13, 13, 16),
 					BorderSizePixel = 0,
 					Size = UDim2.new(1, 0, 0, 0),
 					AutomaticSize = Enum.AutomaticSize.Y,
 					ClipsDescendants = true,
 				}, Card)
 				Corner(KeyContainer, 6)
-				Stroke(KeyContainer, Theme.Stroke, 1)
-				Padding(KeyContainer, 8, 8, 8, 8)
+				Stroke(KeyContainer, Theme.StrokeSoft or Color3.fromRGB(36, 36, 44), 1)
+				Padding(KeyContainer, 10, 10, 10, 10)
 
 				local KeyLayout = New("UIListLayout", {
 					Padding = UDim.new(0, 6),
@@ -7009,37 +7927,103 @@ function Sena:CreateWindow(config)
 				local isDonator = IsDonator()
 				local donInfo = Sena.DonatorInfo or (getgenv and getgenv().SenaDonatorInfo)
 
+				local KeyHeaderRow = New("Frame", {
+					Name = "KeyHeaderRow",
+					LayoutOrder = 1,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 18),
+				}, KeyContainer)
+				local KHLayout = New("UIListLayout", {
+					FillDirection = Enum.FillDirection.Horizontal,
+					SortOrder = Enum.SortOrder.LayoutOrder,
+					VerticalAlignment = Enum.VerticalAlignment.Center,
+				}, KeyHeaderRow)
+
 				local KeyHeader = New("TextLabel", {
 					Name = "KeyHeader",
 					LayoutOrder = 1,
 					BackgroundTransparency = 1,
-					Size = UDim2.new(1, 0, 0, 16),
+					Size = UDim2.new(1, -120, 1, 0),
 					Font = Theme.FontBold,
-					Text = isDonator and "★ Donator Status: Active" or "Donator Key Activation",
-					TextColor3 = isDonator and Color3.fromRGB(245, 215, 120) or Theme.Text,
-					TextSize = 12,
+					Text = isDonator and "Donator Status: Active" or "License Key Activation",
+					TextColor3 = Theme.Text or Color3.fromRGB(235, 235, 245),
+					TextSize = 11,
 					TextXAlignment = Enum.TextXAlignment.Left,
+				}, KeyHeaderRow)
+
+				local KeyStatusBadge = New("Frame", {
+					Name = "KeyStatusBadge",
+					LayoutOrder = 2,
+					BackgroundColor3 = Color3.fromRGB(24, 24, 28),
+					BorderSizePixel = 0,
+					Size = UDim2.new(0, 115, 1, 0),
+				}, KeyHeaderRow)
+				Corner(KeyStatusBadge, 4)
+				Stroke(KeyStatusBadge, Color3.fromRGB(44, 44, 52), 1)
+
+				local daysRemaining = donInfo and tonumber(donInfo.days_left) or 0
+				local BadgeStatusLabel = New("TextLabel", {
+					Name = "BadgeStatusLabel",
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 1, 0),
+					Font = Theme.FontBold,
+					Text = isDonator and (daysRemaining > 0 and (tostring(daysRemaining) .. " Days Left") or "Active") or "Not Active",
+					TextColor3 = isDonator and Color3.fromRGB(220, 220, 230) or (Theme.SubText or Color3.fromRGB(150, 150, 160)),
+					TextSize = 10,
+					TextXAlignment = Enum.TextXAlignment.Center,
+				}, KeyStatusBadge)
+
+				-- Input Box + Paste Button Row
+				local InputRow = New("Frame", {
+					Name = "InputRow",
+					LayoutOrder = 2,
+					BackgroundTransparency = 1,
+					Size = UDim2.new(1, 0, 0, 32),
 				}, KeyContainer)
+				local InputRowLayout = New("UIListLayout", {
+					FillDirection = Enum.FillDirection.Horizontal,
+					Padding = UDim.new(0, 6),
+					SortOrder = Enum.SortOrder.LayoutOrder,
+				}, InputRow)
 
 				local InputBoxFrame = New("Frame", {
 					Name = "InputBoxFrame",
-					LayoutOrder = 2,
-					BackgroundColor3 = Theme.Element or Color3.fromRGB(25, 25, 33),
+					LayoutOrder = 1,
+					BackgroundColor3 = Color3.fromRGB(20, 20, 24),
 					BorderSizePixel = 0,
-					Size = UDim2.new(1, 0, 0, 32),
-				}, KeyContainer)
+					Size = UDim2.new(1, -70, 1, 0),
+				}, InputRow)
 				Corner(InputBoxFrame, 6)
-				Stroke(InputBoxFrame, Theme.Stroke, 1)
+				Stroke(InputBoxFrame, Theme.StrokeSoft or Color3.fromRGB(40, 40, 48), 1)
 
-				local existingKey = (getgenv and (getgenv().SenaKey or (getgenv().SenaDonator and getgenv().SenaDonator.Key)))
-					or (_G and _G.SenaKey)
+				local existingKey = (getgenv and (getgenv().SenaKey or getgenv().SenaDonatorKey or (getgenv().SenaDonator and getgenv().SenaDonator.Key)))
+					or (_G and (_G.SenaKey or _G.SenaDonatorKey))
 					or ""
 				if existingKey == "" and isfile and readfile then
-					pcall(function()
-						if isfile("sena_key.txt") then
-							existingKey = readfile("sena_key.txt")
-						end
-					end)
+					local keyFiles = {
+						"sena_key.txt",
+						"Sena/sena_key.txt",
+						"SenaKey.txt",
+						"senahub_key.txt",
+						"Sena_AutoSave.json",
+						"Sena/Sena_AutoSave.json",
+					}
+					for _, f in ipairs(keyFiles) do
+						pcall(function()
+							if isfile(f) then
+								local c = readfile(f)
+								if f:find("%.json$") then
+									local okJ, d = pcall(HttpService.JSONDecode, HttpService, c)
+									if okJ and type(d) == "table" and d.donatorKey and #tostring(d.donatorKey) > 0 then
+										existingKey = tostring(d.donatorKey)
+									end
+								elseif c and c:gsub("%s+", "") ~= "" then
+									existingKey = c
+								end
+							end
+						end)
+						if existingKey ~= "" then break end
+					end
 				end
 
 				local KeyBox = New("TextBox", {
@@ -7048,37 +8032,98 @@ function Sena:CreateWindow(config)
 					Position = UDim2.new(0, 8, 0, 0),
 					Size = UDim2.new(1, -16, 1, 0),
 					Font = Theme.Font,
-					PlaceholderText = "Paste or enter key here...",
-					PlaceholderColor3 = Theme.SubText,
+					PlaceholderText = "Paste your license key (SENA-XXXX-...)",
+					PlaceholderColor3 = Theme.SubText or Color3.fromRGB(130, 130, 140),
 					Text = tostring(existingKey or ""),
-					TextColor3 = Theme.Text,
-					TextSize = 12,
+					TextColor3 = Theme.Text or Color3.fromRGB(235, 235, 245),
+					TextSize = 11,
 					ClearTextOnFocus = false,
 					TextXAlignment = Enum.TextXAlignment.Left,
 					TextTruncate = Enum.TextTruncate.AtEnd,
 				}, InputBoxFrame)
 
+				local PasteBtn = New("TextButton", {
+					Name = "PasteBtn",
+					LayoutOrder = 2,
+					Active = true,
+					Size = UDim2.new(0, 64, 1, 0),
+					BackgroundColor3 = Color3.fromRGB(26, 26, 32),
+					BorderSizePixel = 0,
+					Font = Theme.FontBold,
+					Text = "Paste",
+					TextColor3 = Theme.Text or Color3.fromRGB(220, 220, 230),
+					TextSize = 11,
+					AutoButtonColor = false,
+				}, InputRow)
+				Corner(PasteBtn, 6)
+				Stroke(PasteBtn, Theme.StrokeSoft or Color3.fromRGB(40, 40, 48), 1)
+
+				PasteBtn.MouseEnter:Connect(function()
+					Elevate()
+					Tween(PasteBtn, QUICK, { BackgroundColor3 = Color3.fromRGB(36, 36, 44) })
+				end)
+				PasteBtn.MouseLeave:Connect(function()
+					Elevate()
+					Tween(PasteBtn, QUICK, { BackgroundColor3 = Color3.fromRGB(26, 26, 32) })
+				end)
+
+				OnTap(PasteBtn, function()
+					Elevate()
+					local cb = ReadClipboard()
+					if cb and cb:gsub("%s+", "") ~= "" then
+						KeyBox.Text = cb:gsub("%s+", "")
+						Sena:Notify({
+							Title = "Key Pasted",
+							Content = "Pasted license key from clipboard.",
+							Icon = "check",
+							Duration = 2,
+						})
+					else
+						Sena:Notify({
+							Title = "Clipboard Empty",
+							Content = "No text found in clipboard.",
+							Icon = "info",
+							Duration = 2,
+						})
+					end
+				end)
+				PasteBtn.MouseButton1Click:Connect(function()
+					Elevate()
+					local cb = ReadClipboard()
+					if cb and cb:gsub("%s+", "") ~= "" then KeyBox.Text = cb:gsub("%s+", "") end
+				end)
+
 				local RedeemBtn = New("TextButton", {
 					Name = "RedeemBtn",
 					LayoutOrder = 3,
 					Active = true,
-					Size = UDim2.new(1, 0, 0, 30),
-					BackgroundColor3 = Color3.fromRGB(215, 165, 45),
+					Size = UDim2.new(1, 0, 0, 32),
+					BackgroundColor3 = Color3.fromRGB(32, 32, 38),
 					BorderSizePixel = 0,
 					Font = Theme.FontBold,
-					Text = isDonator and "Key Active (Re-enter to renew)" or "Redeem Key",
-					TextColor3 = Color3.fromRGB(20, 20, 24),
-					TextSize = 12,
+					Text = isDonator and "Key Active (Enter new key to renew)" or "Redeem License Key",
+					TextColor3 = Color3.fromRGB(240, 240, 245),
+					TextSize = 11,
 					AutoButtonColor = false,
 				}, KeyContainer)
 				Corner(RedeemBtn, 6)
+				Stroke(RedeemBtn, Theme.Stroke or Color3.fromRGB(50, 50, 60), 1)
+
+				RedeemBtn.MouseEnter:Connect(function()
+					Elevate()
+					Tween(RedeemBtn, QUICK, { BackgroundColor3 = Color3.fromRGB(42, 42, 50) })
+				end)
+				RedeemBtn.MouseLeave:Connect(function()
+					Elevate()
+					Tween(RedeemBtn, QUICK, { BackgroundColor3 = Color3.fromRGB(32, 32, 38) })
+				end)
 
 				local initialStatusText = ""
 				if isDonator then
 					local days = donInfo and tonumber(donInfo.days_left) or 30
-					initialStatusText = string.format("★ Active Donator (%d days remaining)", days)
+					initialStatusText = string.format("Donator VIP Active (%d days remaining). All features unlocked.", days)
 				else
-					initialStatusText = "Enter key above to unlock all Donator features."
+					initialStatusText = "Enter your license key above to activate Donator VIP."
 				end
 
 				local StatusLabel = New("TextLabel", {
@@ -7089,8 +8134,8 @@ function Sena:CreateWindow(config)
 					AutomaticSize = Enum.AutomaticSize.Y,
 					Font = Theme.FontBody,
 					Text = initialStatusText,
-					TextColor3 = isDonator and Color3.fromRGB(245, 215, 120) or Theme.SubText,
-					TextSize = 11,
+					TextColor3 = Theme.SubText or Color3.fromRGB(150, 150, 160),
+					TextSize = 10,
 					TextWrapped = true,
 					TextXAlignment = Enum.TextXAlignment.Center,
 				}, KeyContainer)
@@ -7100,17 +8145,17 @@ function Sena:CreateWindow(config)
 					if isRedeeming then return end
 					local raw = KeyBox.Text
 					if not raw or raw:gsub("%s+", "") == "" then
-						StatusLabel.Text = "Please enter a key before redeeming."
+						StatusLabel.Text = "Please enter a license key before redeeming."
 						StatusLabel.TextColor3 = Color3.fromRGB(240, 90, 90)
 						return
 					end
 
 					isRedeeming = true
 					local enteredKey = raw:gsub("%s+", ""):upper()
-					RedeemBtn.Text = "Verifying..."
+					RedeemBtn.Text = "Verifying license..."
 					RedeemBtn.Active = false
-					StatusLabel.Text = "Checking key with server..."
-					StatusLabel.TextColor3 = Color3.fromRGB(245, 215, 120)
+					StatusLabel.Text = "Contacting Sena license server..."
+					StatusLabel.TextColor3 = Color3.fromRGB(200, 200, 210)
 
 					task.spawn(function()
 						Elevate()
@@ -7119,46 +8164,50 @@ function Sena:CreateWindow(config)
 							pcall(function()
 								if writefile then
 									writefile("sena_key.txt", enteredKey)
+									if makefolder and isfolder then
+										if not isfolder("Sena") then pcall(makefolder, "Sena") end
+										pcall(writefile, "Sena/sena_key.txt", enteredKey)
+									end
 								end
 							end)
 							if getgenv then
 								getgenv().SenaKey = enteredKey
 								getgenv().SenaDonatorKey = enteredKey
 								getgenv().SenaDonatorInfo = res
+								getgenv().SenaIsDonator = true
 							end
 							if _G then
 								_G.SenaKey = enteredKey
+								_G.SenaDonatorKey = enteredKey
 								_G.SenaDonatorInfo = res
+								_G.SenaIsDonator = true
 							end
 
 							Sena:SetDonator(true)
 							Sena.DonatorInfo = res
 
-							-- Unlock all features in real-time across the entire UI
 							Sena:UnlockAllDonatorFeatures()
 
 							local days = tonumber(res.days_left) or 30
-							RedeemBtn.Text = "Redeemed! ✓"
-							RedeemBtn.BackgroundColor3 = Color3.fromRGB(45, 185, 90)
-							RedeemBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+							RedeemBtn.Text = "Activated Successfully! ✓"
+							RedeemBtn.BackgroundColor3 = Color3.fromRGB(40, 60, 45)
 
-							KeyHeader.Text = "★ Donator Status: Active"
-							KeyHeader.TextColor3 = Color3.fromRGB(245, 215, 120)
-							StatusLabel.Text = string.format("★ Donator Active! (%d days left)", days)
-							StatusLabel.TextColor3 = Color3.fromRGB(245, 215, 120)
+							KeyHeader.Text = "Donator Status: Active"
+							BadgeStatusLabel.Text = tostring(days) .. " Days Left"
+							StatusLabel.Text = string.format("Donator VIP Active! (%d days remaining)", days)
+							StatusLabel.TextColor3 = Color3.fromRGB(200, 230, 205)
 
 							Sena:Notify({
-								Title = "Donator Unlocked!",
-								Content = string.format("Key validated! %d days of Donator access activated.", days),
+								Title = "Donator VIP Unlocked",
+								Content = string.format("License verified! %d days of Donator access active.", days),
 								Icon = "check",
 								Duration = 6,
 							})
 
 							task.delay(3, function()
 								if RedeemBtn and RedeemBtn.Parent then
-									RedeemBtn.Text = "Key Active (Re-enter to renew)"
-									RedeemBtn.BackgroundColor3 = Color3.fromRGB(215, 165, 45)
-									RedeemBtn.TextColor3 = Color3.fromRGB(20, 20, 24)
+									RedeemBtn.Text = "Key Active (Enter new key to renew)"
+									RedeemBtn.BackgroundColor3 = Color3.fromRGB(32, 32, 38)
 									RedeemBtn.Active = true
 									isRedeeming = false
 								end
@@ -7171,15 +8220,14 @@ function Sena:CreateWindow(config)
 								reason = "Key has expired. Please renew."
 							end
 
-							RedeemBtn.Text = "Failed ✗"
-							RedeemBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
-							RedeemBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+							RedeemBtn.Text = "Redeem Failed ✗"
+							RedeemBtn.BackgroundColor3 = Color3.fromRGB(65, 30, 30)
 
 							StatusLabel.Text = "Failed: " .. reason
 							StatusLabel.TextColor3 = Color3.fromRGB(240, 90, 90)
 
 							Sena:Notify({
-								Title = "Key Validation Failed",
+								Title = "Activation Failed",
 								Content = reason,
 								Icon = "x",
 								Duration = 5,
@@ -7187,9 +8235,8 @@ function Sena:CreateWindow(config)
 
 							task.delay(2.5, function()
 								if RedeemBtn and RedeemBtn.Parent then
-									RedeemBtn.Text = IsDonator() and "Key Active (Re-enter to renew)" or "Redeem Key"
-									RedeemBtn.BackgroundColor3 = Color3.fromRGB(215, 165, 45)
-									RedeemBtn.TextColor3 = Color3.fromRGB(20, 20, 24)
+									RedeemBtn.Text = IsDonator() and "Key Active (Enter new key to renew)" or "Redeem License Key"
+									RedeemBtn.BackgroundColor3 = Color3.fromRGB(32, 32, 38)
 									RedeemBtn.Active = true
 									isRedeeming = false
 								end
@@ -7205,68 +8252,16 @@ function Sena:CreateWindow(config)
 					if enterPressed then DoRedeem() end
 				end)
 
-				local CopyBtn = New("TextButton", {
-					Name = "CopyLink",
-					LayoutOrder = 4,
-					Active = true,
-					Size = UDim2.new(1, 0, 0, 34),
-					BackgroundColor3 = Theme.Accent,
-					BorderSizePixel = 0,
-					Font = Theme.FontBold,
-					Text = buttonLabel,
-					TextColor3 = Theme.AccentText,
-					TextSize = 12,
-					AutoButtonColor = false,
-				}, Card)
-				Corner(CopyBtn, 6)
-
-				CopyBtn.MouseEnter:Connect(function()
-					Elevate()
-					Tween(CopyBtn, QUICK, { BackgroundTransparency = 0.12 })
-				end)
-				CopyBtn.MouseLeave:Connect(function()
-					Elevate()
-					Tween(CopyBtn, QUICK, { BackgroundTransparency = 0 })
-				end)
-
-				local function DoCopy()
-					Elevate()
-					local copied = false
-					if setclipboard then
-						pcall(setclipboard, donateUrl)
-						copied = true
-					elseif syn and syn.write_clipboard then
-						pcall(syn.write_clipboard, donateUrl)
-						copied = true
-					elseif toclipboard then
-						pcall(toclipboard, donateUrl)
-						copied = true
-					end
-
-					if openurl then
-						pcall(openurl, donateUrl)
-					end
-
-					Sena:Notify({
-						Title = "Get Key Link",
-						Content = "Copied to clipboard: " .. donateUrl,
-						Icon = "check",
-						Duration = 4,
-					})
-
-					CopyBtn.Text = "Copied to Clipboard! ✓"
-					task.delay(2.5, function()
-						if CopyBtn and CopyBtn.Parent then
-							CopyBtn.Text = buttonLabel
-						end
-					end)
-				end
-
-				OnTap(CopyBtn, DoCopy)
-				CopyBtn.MouseButton1Click:Connect(DoCopy)
-				CopyBtn.Activated:Connect(DoCopy)
-
 				Register(Card, sTitle .. " " .. sDesc)
+
+				Card:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+					Elevate()
+					Resize(true)
+				end)
+				task.defer(function()
+					Elevate()
+					Resize(true)
+				end)
 
 				local handle = {}
 				function handle:SetTitle(t) Title.Text = tostring(t or "") end
