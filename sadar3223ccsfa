@@ -529,6 +529,8 @@ Sena.Windows = {}
 Sena.Unloaded = false
 Sena.IsDonator = false
 Sena.IsTrial = false
+Sena.__FIXED_AUTOLOAD = true
+Sena.BuildVersion = 310
 do
 	local okT, valT = pcall(function()
 		return (getgenv and getgenv().SenaIsTrial == true) or (_G and _G.SenaIsTrial == true)
