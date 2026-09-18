@@ -50,7 +50,13 @@ end
 -- callbacks lose the capability to touch Instances at all, so reading
 -- AbsoluteSize raises "cannot access 'Instance'". Re-assert before touching GUI.
 local function Elevate()
-	if SetIdentity then pcall(SetIdentity, 8) end
+	local setFn = rawget(_G, "setthreadidentity") or rawget(_G, "setidentity")
+		or (type(setthreadidentity) == "function" and setthreadidentity)
+		or (type(setidentity) == "function" and setidentity)
+		or (type(set_thread_identity) == "function" and set_thread_identity)
+		or (type(setthreadcontext) == "function" and setthreadcontext)
+		or (syn and type(syn.set_thread_identity) == "function" and syn.set_thread_identity)
+	if setFn then pcall(setFn, 8) end
 end
 
 
@@ -2746,7 +2752,11 @@ function Sena:CreateWindow(config)
 				if pendingVal ~= nil then
 					task.spawn(function()
 						Elevate()
-						pcall(funcs.Set, pendingVal, false, true)
+						pcall(function()
+							if type(funcs.Set) == "function" then
+								funcs:Set(pendingVal, false, true)
+							end
+						end)
 					end)
 				end
 			end
@@ -2757,7 +2767,12 @@ function Sena:CreateWindow(config)
 			for _, key in ipairs(self.Order) do
 				local funcs = self.Elements[key]
 				if funcs then
-					local ok, value = pcall(funcs.Get)
+					local ok, value = pcall(function()
+						if type(funcs.Get) == "function" then
+							return funcs:Get()
+						end
+						return nil
+					end)
 					if ok and value ~= nil then data[key] = value end
 				end
 			end
@@ -2777,7 +2792,9 @@ function Sena:CreateWindow(config)
 					if funcs and value ~= nil then
 						count = count + 1
 						pcall(function()
-							funcs:Set(value, false, true)
+							if type(funcs.Set) == "function" then
+								funcs:Set(value, false, true)
+							end
 						end)
 						if count % 6 == 0 then
 							task.wait(0.02)
@@ -3679,10 +3696,40 @@ function Sena:CreateWindow(config)
 				local configKey = (type(itemCfg) == "table" and itemCfg.Flag)
 					or (key .. "/" .. secTitle .. "/" .. tostring(itemTitle))
 
-				ConfigSystem:Register(configKey, {
-					Get = getter or function() return funcs:Get() end,
-					Set = setter or function(value) funcs:Set(value) end,
-				})
+				local entry = {}
+				local function doSet(val, skipCallback, instant)
+					if setter then
+						pcall(setter, val, skipCallback, instant)
+					elseif type(funcs) == "table" and type(funcs.Set) == "function" then
+						pcall(function()
+							funcs:Set(val, skipCallback, instant)
+						end)
+					end
+				end
+
+				local function doGet()
+					if getter then return getter() end
+					if type(funcs) == "table" and type(funcs.Get) == "function" then
+						return funcs:Get()
+					end
+					return nil
+				end
+
+				entry.Get = function(self_or_nil)
+					return doGet()
+				end
+
+				entry.Set = function(self_or_val, maybeVal, maybeSkip, maybeInst)
+					if self_or_val == entry then
+						-- Invoked with colon: entry:Set(val, skipCallback, instant)
+						doSet(maybeVal, maybeSkip, maybeInst)
+					else
+						-- Invoked with dot or pcall: entry.Set(val, skipCallback, instant)
+						doSet(self_or_val, maybeVal, maybeSkip)
+					end
+				end
+
+				ConfigSystem:Register(configKey, entry)
 			end
 
 			function Elements:AddParagraph(itemCfg)
@@ -7330,6 +7377,7 @@ function Sena:CreateWindow(config)
 						task.spawn(function()
 							Elevate()
 							local ok, err = pcall(fn, r.entry, function(label, color)
+								Elevate()
 								if not (btn and btn.Parent) then return end
 								if label ~= nil then btn.Text = tostring(label) end
 								if color ~= nil then btn.BackgroundColor3 = badgeColor(color) end
