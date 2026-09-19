@@ -1691,8 +1691,8 @@ local function StartBackendLoop(this)
 				this.Connected = false
 			end
 
-			local wait = this.Interval
-			if failures > 0 then wait = math.min(30, this.Interval * (1 + failures)) end
+			local wait = this.Interval + (math.random(0, 1500) / 1000)
+			if failures > 0 then wait = math.min(30, this.Interval * (1 + failures)) + (math.random(0, 1500) / 1000) end
 			task.wait(wait)
 		end
 		this.LoopAlive = false
@@ -7533,8 +7533,8 @@ function Sena:CreateWindow(config)
 				local sDesc       = tostring(itemCfg.Description or itemCfg.Content
 					or "Complete checkpoint verification at senahub.xyz/key for free 12h access, or upgrade to Donator VIP for permanent execution and zero wait.")
 				local freeKeyUrl  = "https://senahub.xyz/key"
-				local donateUrl   = tostring(itemCfg.Url or itemCfg.Link or "https://sociabuzz.com/senaroblox/tribe")
-				local discordUrl  = "https://discord.gg/senahub"
+				local donateUrl   = tostring(itemCfg.Url or itemCfg.Link or "https://senahub.xyz/#donator")
+				local discordUrl  = "https://dsc.gg/senahub"
 
 				itemOrder = itemOrder + 1
 
@@ -7866,11 +7866,10 @@ function Sena:CreateWindow(config)
 					return row
 				end
 
-				MakeStep(2, 1, "Join our official Discord community at <b>discord.gg/senahub</b>", false)
-				MakeStep(3, 2, "Go to the <b>「💖」donator-tutorial</b> channel", false)
-				MakeStep(4, 3, "Open the SociaBuzz link (<b>sociabuzz.com/senaroblox/tribe</b>)", false)
-				MakeStep(5, 4, "<b>IMPORTANT:</b> In the \"Nama (Name)\" field, enter your exact <b>Discord username</b>", true)
-				MakeStep(6, 5, "Sena Bot will automatically DM your private license key and grant VIP role", false)
+				MakeStep(2, 1, "Visit our official website at <b>senahub.xyz</b> (or click Get VIP below)", false)
+				MakeStep(3, 2, "Select your VIP Pass plan (7D / 30D) & complete payment via instant QRIS", false)
+				MakeStep(4, 3, "Your private VIP license key will be revealed immediately on screen & ready to paste", false)
+				MakeStep(5, 4, "<b>OPTIONAL:</b> Enter your Discord username during checkout to automatically receive the VIP role", true)
 
 				-- Action Buttons Container (Monochrome dark/slate buttons)
 				local ActionContainer = New("Frame", {
@@ -7940,7 +7939,7 @@ function Sena:CreateWindow(config)
 					BackgroundColor3 = Color3.fromRGB(24, 24, 28),
 					BorderSizePixel = 0,
 					Font = Theme.FontBold,
-					Text = "Get VIP (SociaBuzz)",
+					Text = "Get VIP (senahub.xyz)",
 					TextColor3 = Theme.Text or Color3.fromRGB(220, 220, 230),
 					TextSize = 11,
 					AutoButtonColor = false,
@@ -7984,8 +7983,8 @@ function Sena:CreateWindow(config)
 				OnTap(DiscordBtn, function() CopyAction(discordUrl, DiscordBtn, "Join Discord", "Copied Discord Link! ✓") end)
 				DiscordBtn.MouseButton1Click:Connect(function() CopyAction(discordUrl, DiscordBtn, "Join Discord", "Copied Discord Link! ✓") end)
 
-				OnTap(SociaBtn, function() CopyAction(donateUrl, SociaBtn, "Get VIP (SociaBuzz)", "Copied SociaBuzz Link! ✓") end)
-				SociaBtn.MouseButton1Click:Connect(function() CopyAction(donateUrl, SociaBtn, "Get VIP (SociaBuzz)", "Copied SociaBuzz Link! ✓") end)
+				OnTap(SociaBtn, function() CopyAction(donateUrl, SociaBtn, "Get VIP (senahub.xyz)", "Copied Website Link! ✓") end)
+				SociaBtn.MouseButton1Click:Connect(function() CopyAction(donateUrl, SociaBtn, "Get VIP (senahub.xyz)", "Copied Website Link! ✓") end)
 
 				-- Dedicated Key Input Container (Monochrome)
 				local KeyContainer = New("Frame", {
