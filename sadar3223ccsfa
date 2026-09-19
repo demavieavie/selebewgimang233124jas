@@ -7867,7 +7867,7 @@ function Sena:CreateWindow(config)
 				end
 
 				MakeStep(2, 1, "Visit our official website at <b>senahub.xyz</b> (or click Get VIP below)", false)
-				MakeStep(3, 2, "Select your VIP Pass plan (7D / 30D) & complete payment via instant QRIS", false)
+				MakeStep(3, 2, "Select your VIP Pass plan (7D / 30D) & complete payment instant", false)
 				MakeStep(4, 3, "Your private VIP license key will be revealed immediately on screen & ready to paste", false)
 				MakeStep(5, 4, "<b>OPTIONAL:</b> Enter your Discord username during checkout to automatically receive the VIP role", true)
 
